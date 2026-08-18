@@ -1,131 +1,71 @@
-// Web Audio playback clock.
-// The whole game reads "now" from here (AudioContext.currentTime based),
-// never from requestAnimationFrame deltas, so dropped rendering frames
-// never desync notes from the music - only the audio clock is the truth.
+// Playback via a plain HTMLAudioElement.
 //
-// iOS Safari only allows an AudioContext to start/resume as a direct
-// consequence of a user gesture (tap/click). The context is therefore
-// created and resumed EAGERLY inside unlock(), which must be called
-// synchronously from the very first tap handler (see main.js's
-// "btn-start" listener) - not lazily inside load(), which usually runs
-// later after async fetch/decode work and can lose the gesture.
+// The previous Web Audio API (AudioContext) implementation still produced
+// no sound on real iPhone Safari even after adding an unlock() step, so
+// this is intentionally the simplest thing that reliably works on iOS:
+// a single <audio> element whose .play() is called synchronously from
+// inside a real user-gesture click handler (see main.js - no `await`
+// happens before that call). audio.currentTime is the game's timing clock,
+// exactly as suggested - no AudioContext is required for playback.
 export class AudioEngine {
   constructor() {
-    this.ctx = null;
-    this.buffer = null;
-    this.source = null;
-    this.gainNode = null;
-    this.startedAtCtxTime = 0; // ctx.currentTime when playback started
-    this.startOffsetSec = 0; // offset into the track playback started at
-    this.playing = false;
-    this._pausedAtSec = 0;
+    this.element = document.createElement("audio");
+    this.element.preload = "auto";
+    this.element.playsInline = true;
+    this.element.setAttribute("playsinline", "true");
+    this.element.setAttribute("webkit-playsinline", "true");
+    this.element.style.display = "none";
+    document.body.appendChild(this.element);
+    this._src = null;
   }
 
-  ensureContext() {
-    if (!this.ctx) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) throw new Error("この端末のブラウザはWeb Audio APIに対応していません");
-      this.ctx = new Ctx();
-      this.gainNode = this.ctx.createGain();
-      this.gainNode.connect(this.ctx.destination);
-    }
-    return this.ctx;
+  /** Safe to call anytime (no gesture needed) - just points the element at a URL and starts buffering. */
+  setSource(url) {
+    if (this._src === url) return;
+    this._src = url;
+    this.element.src = url;
+    this.element.load();
   }
 
-  /** Must be called synchronously from a user-gesture handler (tap/click). */
-  async unlock() {
-    const ctx = this.ensureContext();
-    if (ctx.state === "suspended") {
-      await ctx.resume();
-    }
-    // Some iOS Safari versions only fully unlock the audio pipeline after a
-    // buffer has actually been started once inside the gesture; a silent
-    // 1-sample buffer is enough and costs nothing audible.
-    const primer = ctx.createBuffer(1, 1, ctx.sampleRate);
-    const src = ctx.createBufferSource();
-    src.buffer = primer;
-    src.connect(ctx.destination);
-    src.start(0);
-  }
-
-  async load(url) {
-    this.ensureContext();
-    let res;
-    try {
-      res = await fetch(url);
-    } catch (e) {
-      throw new Error(`楽曲ファイルの取得に失敗しました (network error): ${url}`);
-    }
-    if (!res.ok) {
-      throw new Error(`楽曲ファイルの取得に失敗しました (HTTP ${res.status}): ${url}`);
-    }
-    const arrayBuffer = await res.arrayBuffer();
-    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-      throw new Error(`楽曲ファイルが空です: ${url}`);
-    }
-    try {
-      this.buffer = await this.ctx.decodeAudioData(arrayBuffer);
-    } catch (e) {
-      throw new Error(`楽曲のデコードに失敗しました (decodeAudioData): ${url}`);
-    }
-    return this.buffer.duration;
-  }
-
-  play(fromSec = 0) {
-    if (!this.buffer) return;
-    if (this.ctx.state === "suspended") this.ctx.resume();
-    this._stopSource();
-    this.source = this.ctx.createBufferSource();
-    this.source.buffer = this.buffer;
-    this.source.connect(this.gainNode);
-    this.startOffsetSec = fromSec;
-    this.startedAtCtxTime = this.ctx.currentTime;
-    this.source.start(0, fromSec);
-    this.playing = true;
+  /**
+   * Starts playback. MUST be called synchronously from inside a user-gesture
+   * event handler (click/touchend), with no `await` before this call, or
+   * iOS Safari will silently refuse to play. Returns the native play()
+   * Promise - resolves once audio is actually audible, rejects otherwise
+   * (e.g. NotAllowedError if not really inside a gesture, NotSupportedError
+   * if the format/codec failed).
+   */
+  playFromGesture() {
+    this.element.currentTime = 0;
+    return this.element.play();
   }
 
   pause() {
-    if (!this.playing) return;
-    this._pausedAtSec = this.currentTime;
-    this._stopSource();
-    this.playing = false;
+    this.element.pause();
   }
 
   resume() {
-    if (this.playing) return;
-    this.play(this._pausedAtSec);
+    return this.element.play();
   }
 
   stop() {
-    this._stopSource();
-    this.playing = false;
-    this._pausedAtSec = 0;
-  }
-
-  setVolume(v) {
-    if (this.gainNode) this.gainNode.gain.value = v;
-  }
-
-  _stopSource() {
-    if (this.source) {
-      try {
-        this.source.onended = null;
-        this.source.stop();
-      } catch (e) {
-        /* already stopped */
-      }
-      this.source.disconnect();
-      this.source = null;
+    this.element.pause();
+    try {
+      this.element.currentTime = 0;
+    } catch (e) {
+      /* not seekable yet, ignore */
     }
   }
 
-  /** Current playback position in seconds, driven by the audio clock. */
   get currentTime() {
-    if (!this.playing) return this._pausedAtSec;
-    return this.startOffsetSec + (this.ctx.currentTime - this.startedAtCtxTime);
+    return this.element.currentTime;
   }
 
   get duration() {
-    return this.buffer ? this.buffer.duration : 0;
+    return Number.isFinite(this.element.duration) ? this.element.duration : 0;
+  }
+
+  get playing() {
+    return !this.element.paused && !this.element.ended;
   }
 }

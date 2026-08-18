@@ -1,26 +1,26 @@
 import { LANE_COUNT, NOTE_TRAVEL_SEC } from "./constants.js";
 
-// Crystal/hologram palette per lane - translucent plates with a bright rim,
-// not flat black/white bars. Keep it to fill + one glow pass per note so
-// this stays cheap enough for 60fps on iPhone Safari.
+// Quiet, low-saturation crystal palette per lane - thin glass shards, not
+// bright neon bars. Kept to a fill + one soft glow pass per note so this
+// stays cheap enough for 60fps on iPhone Safari.
 const LANE_PALETTES = [
-  { core: "rgba(95,208,255,0.30)", rim: "rgba(160,225,255,0.95)", glow: "rgba(95,208,255,0.55)" },
-  { core: "rgba(140,120,255,0.30)", rim: "rgba(190,175,255,0.95)", glow: "rgba(140,120,255,0.55)" },
-  { core: "rgba(190,120,255,0.30)", rim: "rgba(220,180,255,0.95)", glow: "rgba(190,120,255,0.55)" },
-  { core: "rgba(230,235,255,0.28)", rim: "rgba(245,248,255,0.95)", glow: "rgba(230,235,255,0.55)" },
+  { core: "rgba(180,200,255,0.22)", rim: "rgba(220,230,255,0.55)", glow: "rgba(150,175,255,0.32)" },
+  { core: "rgba(200,190,255,0.20)", rim: "rgba(225,220,255,0.55)", glow: "rgba(180,165,255,0.30)" },
+  { core: "rgba(215,195,255,0.18)", rim: "rgba(230,220,255,0.55)", glow: "rgba(195,175,255,0.28)" },
+  { core: "rgba(235,235,250,0.20)", rim: "rgba(248,248,255,0.60)", glow: "rgba(220,225,255,0.32)" },
 ];
 
-// Draws the playfield onto a canvas that sits ABOVE the background video and
-// the semi-transparent lane overlay (see index.html/css). This module only
-// draws notes/judgement glow - the lane columns and judge pads themselves
-// are plain CSS elements so the "background video -> translucent lanes ->
-// notes/UI" stacking order required by the design is just normal DOM z-index.
+// Draws the playfield onto a canvas that sits ABOVE the background and the
+// hairline lane dividers (see index.html/css). This module only draws
+// notes and the judge-line "membrane of light" - the lane columns and tap
+// pads are plain CSS elements so the "background -> translucent lanes ->
+// notes/UI" stacking order is just normal DOM z-index.
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
-    // Must stay in sync with the `top: 86%` on .judge-pad in css/style.css.
-    this.judgeLineRatio = 0.86;
+    // Must stay in sync with the `top: 82%` on .judge-pad in css/style.css.
+    this.judgeLineRatio = 0.82;
   }
 
   resize() {
@@ -59,59 +59,49 @@ export class Renderer {
         if (tailY > -40) {
           const top = Math.min(headY, tailY);
           const bottom = Math.max(headY, tailY, top + 18);
-          this._drawPlate(x, top, bottom - top, palette, note.state === "holding" ? 1 : 0.6);
+          this._drawShard(x, top, bottom - top, palette, note.state === "holding" ? 1 : 0.55);
         }
         continue;
       }
 
       const y = this.yForTime(note.time, currentTime);
       if (y < -30 || y > this.height + 30) continue;
-
-      // faint motion trail (single extra translucent copy) for a sense of speed
-      this._drawPlate(x, y - 16 - 10, 32, palette, 0.22, false);
-      this._drawPlate(x, y - 16, 32, palette, 1, true);
+      this._drawShard(x, y - 15, 30, palette, 1);
     }
   }
 
-  _drawPlate(x, y, h, palette, alphaMul, withGlow = true) {
+  _drawShard(x, y, h, palette, alphaMul) {
     const ctx = this.ctx;
-    const w = this.laneWidth * 0.76;
-    const px = x + this.laneWidth * 0.12;
+    const w = this.laneWidth * 0.62;
+    const px = x + (this.laneWidth - w) / 2;
     ctx.save();
     ctx.globalAlpha = alphaMul;
-    if (withGlow) {
-      ctx.shadowColor = palette.glow;
-      ctx.shadowBlur = 10;
-    }
+    ctx.shadowColor = palette.glow;
+    ctx.shadowBlur = 7;
     const grad = ctx.createLinearGradient(px, y, px, y + h);
     grad.addColorStop(0, palette.core);
-    grad.addColorStop(1, "rgba(255,255,255,0.05)");
+    grad.addColorStop(1, "rgba(255,255,255,0.04)");
     ctx.fillStyle = grad;
-    roundRect(ctx, px, y, w, h, 10);
+    roundRect(ctx, px, y, w, h, 9);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1;
     ctx.strokeStyle = palette.rim;
-    roundRect(ctx, px, y, w, h, 10);
+    roundRect(ctx, px, y, w, h, 9);
     ctx.stroke();
     ctx.restore();
   }
 
   _drawJudgeLine(comboTier) {
     const ctx = this.ctx;
-    const grad = ctx.createLinearGradient(0, 0, this.width, 0);
-    grad.addColorStop(0, "rgba(95,208,255,0.05)");
-    grad.addColorStop(0.5, "rgba(200,220,255,0.9)");
-    grad.addColorStop(1, "rgba(190,120,255,0.05)");
+    const h = 10 + comboTier * 1.5;
+    const grad = ctx.createLinearGradient(0, this.judgeY - h / 2, 0, this.judgeY + h / 2);
+    grad.addColorStop(0, "rgba(220,230,255,0)");
+    grad.addColorStop(0.5, `rgba(225,232,255,${0.16 + comboTier * 0.05})`);
+    grad.addColorStop(1, "rgba(220,230,255,0)");
     ctx.save();
-    ctx.shadowColor = "rgba(150,190,255,0.7)";
-    ctx.shadowBlur = 6 + comboTier * 3;
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(0, this.judgeY);
-    ctx.lineTo(this.width, this.judgeY);
-    ctx.stroke();
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, this.judgeY - h / 2, this.width, h);
     ctx.restore();
   }
 }

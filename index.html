@@ -7,23 +7,20 @@
 <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-<div id="rotate-overlay">端末を横向きにしてください<br />Please rotate your device to landscape</div>
 <div id="app">
 
   <section id="screen-title" class="screen active">
-    <div class="title-halo" aria-hidden="true"></div>
-    <div class="glass-panel title-panel">
+    <div id="title-bg" aria-hidden="true"></div>
+    <div class="veil-panel title-panel">
       <h1 class="title-logo">RHYTHM<span>GAME</span></h1>
-      <p class="subtitle">汎用ホログラフィック・リズムゲーム基盤</p>
-      <button id="btn-start" class="btn-crystal">
-        <span class="btn-crystal-face">PLAY</span>
-      </button>
-      <p class="rotate-hint">スマートフォンは横画面でお楽しみください</p>
+      <p class="subtitle">汎用リズムゲーム基盤</p>
+      <button id="btn-start" class="btn-veil">PLAY</button>
     </div>
   </section>
 
   <section id="screen-select" class="screen">
-    <div class="glass-panel select-panel">
+    <div id="select-bg" aria-hidden="true"></div>
+    <div class="veil-panel select-panel">
       <h2 id="select-song-title">Loading...</h2>
       <p id="select-song-sub"></p>
       <div class="difficulty-buttons">
@@ -31,7 +28,7 @@
         <button class="btn-diff" data-diff="NORMAL">NORMAL</button>
         <button class="btn-diff" data-diff="HARD">HARD</button>
       </div>
-      <button id="btn-back-title" class="btn-ghost">戻る</button>
+      <button id="btn-back-title" class="btn-text">戻る</button>
     </div>
   </section>
 
@@ -52,10 +49,10 @@
     <canvas id="notes-canvas"></canvas>
 
     <div id="judge-pads">
-      <div class="judge-pad" data-lane="0"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="1"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="2"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="3"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="0"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="1"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="2"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="3"><span class="pad-ripple"></span></div>
     </div>
 
     <div id="touch-zones">
@@ -67,38 +64,38 @@
 
     <div id="hud">
       <div id="hud-top">
-        <div class="hud-glass" id="hud-score-wrap">
+        <div id="hud-score-wrap">
           <span class="hud-label">SCORE</span>
           <div id="hud-score">0</div>
         </div>
-        <div class="hud-glass" id="hud-combo-wrap">
+        <div id="hud-combo-wrap">
           <div id="hud-combo"></div>
         </div>
-        <button id="btn-pause" class="btn-icon">Ⅱ</button>
+        <button id="btn-pause" class="btn-icon">II</button>
       </div>
       <div id="hud-judge"></div>
       <div id="hud-progress"><div id="hud-progress-bar"></div></div>
     </div>
 
     <div id="pause-overlay" class="overlay hidden">
-      <div class="glass-panel overlay-panel">
+      <div class="veil-panel overlay-panel">
         <h3>PAUSE</h3>
-        <button id="btn-resume" class="btn-crystal"><span class="btn-crystal-face">つづける</span></button>
-        <button id="btn-quit" class="btn-ghost">やめる</button>
+        <button id="btn-resume" class="btn-veil">つづける</button>
+        <button id="btn-quit" class="btn-text">やめる</button>
       </div>
     </div>
   </section>
 
   <div id="audio-error-overlay" class="overlay hidden">
-    <div class="glass-panel overlay-panel error-panel">
+    <div class="veil-panel overlay-panel error-panel">
       <h3>AUDIO LOAD ERROR</h3>
       <p id="audio-error-detail"></p>
-      <button id="btn-audio-error-back" class="btn-ghost">曲選択へ戻る</button>
+      <button id="btn-audio-error-back" class="btn-text">曲選択へ戻る</button>
     </div>
   </div>
 
   <section id="screen-result" class="screen">
-    <div class="glass-panel result-panel">
+    <div class="veil-panel result-panel">
       <h2>RESULT</h2>
       <div id="result-rank"></div>
       <div id="result-score-wrap">
@@ -113,8 +110,8 @@
         <div class="stat miss"><span class="label">MISS</span><span id="result-miss" class="value"></span></div>
       </div>
       <div class="result-buttons">
-        <button id="btn-retry" class="btn-crystal"><span class="btn-crystal-face">RETRY</span></button>
-        <button id="btn-to-select" class="btn-ghost">曲選択へ</button>
+        <button id="btn-retry" class="btn-veil">RETRY</button>
+        <button id="btn-to-select" class="btn-text">曲選択へ</button>
       </div>
     </div>
   </section>

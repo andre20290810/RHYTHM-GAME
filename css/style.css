@@ -1,27 +1,28 @@
 :root {
   color-scheme: dark;
 
-  /* --- Nijiiro Eden palette: deep navy / cobalt / electric blue / violet / silver crystal --- */
-  --bg-void: #03040d;
-  --navy-deep: #060a22;
-  --blue-cobalt: #1c4fd6;
-  --blue-electric: #4fc3ff;
-  --blue-cyan: #8fe9ff;
-  --violet: #8b6bff;
-  --violet-deep: #4a2a9e;
-  --silver: #f2f5ff;
+  /* --- Nijiiro Eden palette, softened: deep blue night, quiet violet, --- */
+  /* --- silver-white light. Kept low-saturation on purpose - nothing --- */
+  /* --- here should read as "gaming" neon.                           --- */
+  --bg-void: #060814;
+  --ink: #eef1fb;
+  --ink-dim: rgba(230, 235, 255, 0.58);
+  --ink-faint: rgba(230, 235, 255, 0.34);
 
-  --text: #eef2ff;
-  --text-dim: rgba(238, 242, 255, 0.62);
+  --blue-deep: #16204a;
+  --blue-soft: #8fb0ff;
+  --violet-soft: #b9a8ff;
+  --silver: #f6f4ff;
+  --miss-soft: #caa0bb;
 
-  --perfect: #f4f8ff;
-  --great: #5fd0ff;
-  --good: #a78bff;
-  --miss: #c23a6b;
+  --hairline: rgba(220, 228, 255, 0.16);
+  --veil-fill: rgba(20, 26, 58, 0.22);
+  --veil-glow: 0 0 40px rgba(120, 140, 220, 0.10);
 
-  --glass-border: rgba(170, 200, 255, 0.28);
-  --glass-fill: linear-gradient(160deg, rgba(70, 100, 200, 0.16), rgba(20, 15, 50, 0.10));
-  --glow-soft: 0 0 22px rgba(95, 140, 255, 0.18);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * { box-sizing: border-box; }
@@ -32,8 +33,9 @@ html, body {
   width: 100%;
   height: 100%;
   background: var(--bg-void);
-  color: var(--text);
-  font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  color: var(--ink);
+  font-family: "Hiragino Sans", "Noto Sans JP", "Segoe UI", system-ui, sans-serif;
+  font-weight: 300;
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
@@ -45,9 +47,28 @@ html, body {
   width: 100%;
   height: 100%;
   background:
-    radial-gradient(ellipse at 50% -10%, rgba(60, 90, 220, 0.22), transparent 55%),
-    radial-gradient(ellipse at 15% 110%, rgba(140, 90, 255, 0.14), transparent 50%),
+    radial-gradient(ellipse at 50% 0%, rgba(60, 80, 170, 0.20), transparent 55%),
+    radial-gradient(ellipse at 20% 100%, rgba(130, 100, 210, 0.14), transparent 55%),
     var(--bg-void);
+}
+
+#debug-panel {
+  position: fixed;
+  left: 0; right: 0; top: var(--safe-top);
+  z-index: 999;
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 8px;
+  line-height: 1.4;
+  color: #b9ffcf;
+  background: rgba(0, 0, 0, 0.7);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 130px;
+  overflow-y: auto;
+  /* Diagnostics only - must never block taps on the UI underneath it. */
+  pointer-events: none;
 }
 
 .screen {
@@ -58,141 +79,127 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  padding: 1.5rem;
+  padding: calc(1.4rem + var(--safe-top)) calc(1.4rem + var(--safe-right)) calc(1.4rem + var(--safe-bottom)) calc(1.4rem + var(--safe-left));
   text-align: center;
 }
 .screen.active { display: flex; }
 
-/* ---------- Glass panel (shared design language) ---------- */
-.glass-panel {
+/* ---------- Reference-image backgrounds (title / select) ----------
+   The attached artwork is used unmodified as a background image; only a
+   CSS gradient is layered on top (in the DOM, not on the pixels) so text
+   stays legible. */
+#title-bg, #select-bg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(180deg, rgba(4,6,16,0.55) 0%, rgba(4,6,16,0.20) 30%, rgba(4,6,16,0.35) 70%, rgba(4,6,16,0.80) 100%),
+    url("../assets/title-bg.jpeg");
+  background-size: cover;
+  background-position: center 18%;
+  filter: saturate(0.9) brightness(0.92);
+}
+
+/* ---------- Quiet glass "veil" panel - a hint of surface, not a UI box ---------- */
+.veil-panel {
   position: relative;
-  background: var(--glass-fill);
-  border: 1px solid var(--glass-border);
-  border-radius: 20px;
-  box-shadow: var(--glow-soft), inset 0 0 30px rgba(140, 170, 255, 0.05);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  backdrop-filter: blur(14px) saturate(140%);
-  padding: 1.6rem 2rem;
+  z-index: 1;
+  background: var(--veil-fill);
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  box-shadow: var(--veil-glow);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  padding: 1.8rem 1.8rem;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.9rem;
-}
-.glass-panel::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(160deg, rgba(200, 220, 255, 0.5), rgba(140, 110, 255, 0.05) 40%, rgba(140, 110, 255, 0.25));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+  max-width: min(92vw, 24rem);
 }
 
 /* ---------- Title ---------- */
-#screen-title { position: relative; }
-.title-halo {
-  position: absolute;
-  top: 8%;
-  width: min(60vw, 320px);
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: conic-gradient(from 0deg, rgba(95,195,255,0) 0deg, rgba(95,195,255,0.55) 90deg, rgba(160,120,255,0.55) 200deg, rgba(95,195,255,0) 360deg);
-  filter: blur(18px);
-  opacity: 0.55;
-  animation: haloSpin 14s linear infinite;
-  pointer-events: none;
-}
-@keyframes haloSpin { to { transform: rotate(360deg); } }
-
-.title-panel { margin-top: 14vh; max-width: 26rem; }
+.title-panel { margin-top: auto; margin-bottom: auto; }
 
 .title-logo {
-  font-size: clamp(2rem, 7.5vw, 3.4rem);
-  letter-spacing: 0.1em;
+  font-size: clamp(2rem, 9vw, 2.8rem);
+  font-weight: 200;
+  letter-spacing: 0.16em;
   margin: 0;
-  background: linear-gradient(90deg, var(--blue-cyan), var(--violet));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 0 18px rgba(120, 170, 255, 0.45));
+  color: var(--ink);
+  text-shadow: 0 0 24px rgba(150, 170, 255, 0.35);
 }
-.title-logo span { display: block; font-size: 0.5em; opacity: 0.88; letter-spacing: 0.3em; }
-.subtitle { opacity: 0.7; margin: 0; font-size: 0.9rem; letter-spacing: 0.04em; }
-.rotate-hint { opacity: 0.45; font-size: 0.75rem; margin-top: 1.4rem; }
+.title-logo span { display: block; font-size: 0.48em; opacity: 0.75; letter-spacing: 0.42em; font-weight: 200; margin-top: 0.3em; }
+.subtitle { opacity: 0.5; margin: 0; font-size: 0.8rem; letter-spacing: 0.08em; font-weight: 300; }
 
-/* ---------- Crystal / ghost buttons ---------- */
-.btn-crystal, .btn-ghost, .btn-diff, .btn-icon {
+/* ---------- Quiet buttons: hairline outline, soft glow only, no motion loops ---------- */
+.btn-veil, .btn-text, .btn-diff, .btn-icon {
   font-family: inherit;
   border: none;
   cursor: pointer;
   touch-action: manipulation;
-  color: var(--text);
+  color: var(--ink);
   background: transparent;
+  font-weight: 300;
 }
 
-.btn-crystal {
-  position: relative;
-  padding: 0.85rem 3rem;
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+.btn-veil {
+  padding: 0.75rem 3.2rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.3em;
   border-radius: 999px;
-  border: 1px solid rgba(180, 210, 255, 0.55);
-  background: linear-gradient(160deg, rgba(90, 130, 255, 0.18), rgba(140, 90, 255, 0.08));
-  box-shadow: 0 0 18px rgba(110, 160, 255, 0.35), inset 0 0 16px rgba(200, 220, 255, 0.08);
-  animation: crystalPulse 2.6s ease-in-out infinite;
-  overflow: hidden;
+  border: 1px solid rgba(220, 228, 255, 0.4);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: 0 0 18px rgba(140, 160, 255, 0.14);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
-.btn-crystal-face { position: relative; z-index: 1; text-shadow: 0 0 10px rgba(200, 225, 255, 0.7); }
-.btn-crystal:active { transform: scale(0.97); box-shadow: 0 0 30px rgba(150, 190, 255, 0.6), inset 0 0 20px rgba(220, 235, 255, 0.15); }
-@keyframes crystalPulse {
-  0%, 100% { box-shadow: 0 0 14px rgba(110, 160, 255, 0.28), inset 0 0 14px rgba(200, 220, 255, 0.06); }
-  50% { box-shadow: 0 0 26px rgba(140, 180, 255, 0.5), inset 0 0 20px rgba(210, 225, 255, 0.14); }
+.btn-veil:active {
+  border-color: rgba(240, 245, 255, 0.8);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 26px rgba(180, 195, 255, 0.32);
 }
 
-.btn-ghost {
-  padding: 0.6rem 1.8rem;
-  font-size: 0.9rem;
-  border-radius: 999px;
-  border: 1px solid rgba(180, 200, 255, 0.28);
-  opacity: 0.85;
+.btn-text {
+  padding: 0.5rem 1.4rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  opacity: 0.55;
+  border-bottom: 1px solid transparent;
 }
-.btn-ghost:active { opacity: 1; border-color: rgba(200, 220, 255, 0.55); }
+.btn-text:active { opacity: 0.9; border-bottom-color: rgba(220, 228, 255, 0.4); }
 
 .btn-diff {
-  padding: 0.8rem 1.6rem;
-  min-width: 8.5rem;
+  padding: 0.75rem 1.5rem;
+  min-width: 8rem;
   border-radius: 14px;
-  border: 1px solid rgba(180, 200, 255, 0.3);
-  background: linear-gradient(160deg, rgba(80, 110, 220, 0.14), rgba(20, 15, 50, 0.10));
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  box-shadow: inset 0 0 14px rgba(140, 170, 255, 0.05);
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.02);
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  font-size: 0.85rem;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
-.btn-diff[data-diff="EASY"] { border-color: rgba(140, 255, 210, 0.5); }
-.btn-diff[data-diff="NORMAL"] { border-color: rgba(95, 208, 255, 0.6); }
-.btn-diff[data-diff="HARD"] { border-color: rgba(194, 58, 107, 0.6); }
-.btn-diff:active { box-shadow: 0 0 16px rgba(150, 190, 255, 0.35), inset 0 0 14px rgba(200, 220, 255, 0.1); }
+.btn-diff:active { border-color: rgba(230, 235, 255, 0.55); box-shadow: 0 0 16px rgba(160, 180, 255, 0.2); }
 
 .btn-icon {
-  border: 1px solid rgba(180, 200, 255, 0.3);
+  border: 1px solid var(--hairline);
   border-radius: 999px;
-  padding: 0.35rem 0.8rem;
-  font-size: 1rem;
-  background: rgba(20, 25, 60, 0.35);
+  width: 2.1rem;
+  height: 2.1rem;
+  font-size: 0.8rem;
   pointer-events: auto;
+  opacity: 0.7;
 }
 
 /* ---------- Select ---------- */
-.select-panel { min-width: min(90vw, 22rem); }
-#select-song-title { margin: 0; font-size: 1.3rem; letter-spacing: 0.04em; }
-#select-song-sub { opacity: 0.55; margin: 0; font-size: 0.85rem; }
-.difficulty-buttons { display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center; }
+.select-panel { margin-top: auto; margin-bottom: auto; }
+#select-song-title { margin: 0; font-size: 1.15rem; font-weight: 300; letter-spacing: 0.05em; }
+#select-song-sub { opacity: 0.45; margin: 0; font-size: 0.78rem; }
+.difficulty-buttons { display: flex; gap: 0.7rem; flex-wrap: wrap; justify-content: center; }
 
-/* ---------- Play screen ---------- */
+/* ==================================================================
+   Play screen - PORTRAIT layout (default & primary orientation):
+   top -> falling notes -> judge line -> bottom tap area
+   ================================================================== */
 #screen-play { padding: 0; }
 
 #bg-layer { position: absolute; inset: 0; overflow: hidden; background: var(--bg-void); }
@@ -200,46 +207,46 @@ html, body {
 #bg-fallback {
   position: absolute; inset: 0;
   background:
-    radial-gradient(ellipse at 25% 15%, rgba(90, 130, 255, 0.28), transparent 55%),
-    radial-gradient(ellipse at 80% 85%, rgba(150, 100, 255, 0.22), transparent 55%),
-    linear-gradient(160deg, var(--navy-deep), var(--bg-void) 70%);
+    radial-gradient(ellipse at 30% 10%, rgba(80, 100, 200, 0.20), transparent 55%),
+    radial-gradient(ellipse at 75% 90%, rgba(140, 110, 210, 0.16), transparent 55%),
+    linear-gradient(170deg, var(--blue-deep), var(--bg-void) 75%);
   background-size: 200% 200%;
-  animation: bgDrift 22s ease-in-out infinite;
+  animation: bgDrift 26s ease-in-out infinite;
 }
 @keyframes bgDrift {
   0% { background-position: 0% 0%; }
   50% { background-position: 100% 60%; }
   100% { background-position: 0% 0%; }
 }
-/* Minimal contrast pass so a future background video stays readable under
-   the HUD/notes without ever being fully hidden. */
+/* Minimal contrast pass so a future background video stays visible under
+   the HUD/notes without ever being hidden. */
 #bg-dim {
   position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(3, 4, 13, 0.35) 0%, rgba(3, 4, 13, 0.05) 30%, rgba(3, 4, 13, 0.05) 70%, rgba(3, 4, 13, 0.4) 100%);
+  background: linear-gradient(180deg, rgba(4, 6, 16, 0.30) 0%, rgba(4, 6, 16, 0.02) 22%, rgba(4, 6, 16, 0.02) 68%, rgba(4, 6, 16, 0.32) 100%);
 }
 
 #lanes-overlay {
   position: absolute; inset: 0;
   display: flex;
   z-index: 1;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
 }
 #lanes-overlay .lane {
   position: relative;
   flex: 1;
   height: 100%;
-  background: linear-gradient(180deg, rgba(120, 150, 255, 0.015) 0%, rgba(140, 110, 255, 0.03) 55%, rgba(150, 190, 255, 0.10) 100%);
-  transition: background 0.25s ease;
+  transition: background 0.3s ease;
 }
 #lanes-overlay .lane:not(:last-child)::after {
   content: "";
   position: absolute;
-  top: 0; right: 0; bottom: 0;
+  top: 6%; right: 0; bottom: 6%;
   width: 1px;
-  background: linear-gradient(180deg, transparent 0%, rgba(150, 190, 255, 0.10) 55%, rgba(170, 210, 255, 0.55) 100%);
-  box-shadow: 0 0 6px rgba(140, 180, 255, 0.35);
+  background: var(--hairline);
 }
 #lanes-overlay .lane.active {
-  background: linear-gradient(180deg, rgba(140, 170, 255, 0.05) 0%, rgba(160, 130, 255, 0.08) 55%, rgba(190, 210, 255, 0.20) 100%);
+  background: rgba(210, 220, 255, 0.035);
 }
 
 #notes-canvas {
@@ -249,57 +256,40 @@ html, body {
   display: block;
 }
 
-/* Crystal judge pads - the judge line is not a bare stroke but 4 lit pads.
-   `top` must stay in sync with Renderer.judgeLineRatio in js/renderer.js. */
+/* Judge line is not drawn as UI chrome - each lane just gets an
+   almost-invisible resting glow that the canvas judge line (a thin light
+   membrane) sits above; tapping blooms it briefly. */
 #judge-pads {
   position: absolute; inset: 0;
   display: flex;
   z-index: 3;
   pointer-events: none;
+  padding-bottom: var(--safe-bottom);
 }
 .judge-pad {
   position: relative;
   flex: 1;
-  margin: 0 4px;
+  margin: 0 2px;
   align-self: flex-start;
-  top: 86%;
+  /* keep in sync with Renderer.judgeLineRatio in js/renderer.js */
+  top: 82%;
   transform: translateY(-50%);
-  height: 30px;
-  border-radius: 10px;
-  border: 1px solid rgba(180, 210, 255, 0.32);
-  background: linear-gradient(180deg, rgba(140, 170, 255, 0.08), rgba(120, 90, 255, 0.05));
-  box-shadow: 0 0 10px rgba(120, 160, 255, 0.2), inset 0 0 8px rgba(255, 255, 255, 0.05);
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
-  overflow: visible;
-}
-.judge-pad.active {
-  border-color: rgba(225, 238, 255, 0.85);
-  box-shadow: 0 0 24px rgba(170, 205, 255, 0.6), inset 0 0 14px rgba(255, 255, 255, 0.15);
+  height: 40px;
 }
 .pad-ripple {
-  position: absolute; inset: -2px;
-  border-radius: inherit;
-  border: 2px solid rgba(210, 230, 255, 0.9);
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 60%; aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.3);
+  border: 1px solid rgba(230, 238, 255, 0.75);
   opacity: 0;
   pointer-events: none;
 }
-.pad-ripple.show { animation: padRipple 0.4s ease-out; }
+.pad-ripple.show { animation: padRipple 0.5s ease-out; }
 @keyframes padRipple {
-  0% { opacity: 0.85; transform: scale(1); }
-  100% { opacity: 0; transform: scale(1.7); }
-}
-.pad-particles {
-  position: absolute; inset: -14px;
-  border-radius: inherit;
-  background-image: radial-gradient(circle, rgba(210, 232, 255, 0.95) 1px, transparent 1.6px);
-  background-size: 9px 9px;
-  opacity: 0;
-  pointer-events: none;
-}
-.pad-particles.show { animation: padParticles 0.45s ease-out; }
-@keyframes padParticles {
-  0% { opacity: 0.75; transform: scale(0.55); }
-  100% { opacity: 0; transform: scale(1.5); }
+  0% { opacity: 0.6; transform: translate(-50%, -50%) scale(0.3); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.2); }
 }
 
 #touch-zones {
@@ -315,160 +305,123 @@ html, body {
   pointer-events: none;
   display: flex;
   flex-direction: column;
+  padding-top: var(--safe-top);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
 }
 #hud-top {
   display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  padding: 0.5rem 0.7rem;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.8rem;
 }
-.hud-glass {
-  background: rgba(10, 14, 38, 0.35);
-  border: 1px solid rgba(160, 190, 255, 0.22);
-  border-radius: 12px;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  padding: 0.3rem 0.7rem;
-}
-#hud-score-wrap { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
-.hud-label { font-size: 0.6rem; letter-spacing: 0.18em; opacity: 0.55; }
+#hud-score-wrap { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.hud-label { font-size: 0.55rem; letter-spacing: 0.2em; opacity: 0.4; }
 #hud-score {
-  font-size: clamp(1.05rem, 2.6vw, 1.5rem);
-  font-weight: 800;
+  font-size: 1.05rem;
+  font-weight: 300;
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 10px rgba(140, 180, 255, 0.5);
+  text-shadow: 0 0 10px rgba(150, 170, 255, 0.3);
 }
 #hud-combo-wrap {
   opacity: 0;
-  transition: opacity 0.15s ease;
-  display: flex;
-  align-items: center;
+  transition: opacity 0.2s ease;
 }
 #hud-combo-wrap.show { opacity: 1; }
 #hud-combo {
-  font-size: clamp(0.85rem, 2vw, 1.1rem);
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  color: var(--blue-cyan);
-  text-shadow: 0 0 8px rgba(140, 220, 255, 0.6);
+  font-size: 0.8rem;
+  font-weight: 300;
+  letter-spacing: 0.06em;
+  color: var(--blue-soft);
+  text-shadow: 0 0 8px rgba(140, 170, 255, 0.4);
 }
-#hud-top { position: relative; }
 #btn-pause { margin-left: auto; }
 
-/* Combo escalation: the whole play screen glows a little more per milestone. */
-#screen-play[data-combo-tier="1"] #lanes-overlay .lane::after { box-shadow: 0 0 10px rgba(150, 190, 255, 0.5); }
-#screen-play[data-combo-tier="2"] #lanes-overlay .lane::after { box-shadow: 0 0 14px rgba(160, 200, 255, 0.65); }
-#screen-play[data-combo-tier="2"] .judge-pad { box-shadow: 0 0 16px rgba(140, 180, 255, 0.3), inset 0 0 10px rgba(255,255,255,0.07); }
-#screen-play[data-combo-tier="3"] #lanes-overlay .lane::after { box-shadow: 0 0 20px rgba(180, 210, 255, 0.8); }
-#screen-play[data-combo-tier="3"] .judge-pad { box-shadow: 0 0 22px rgba(160, 200, 255, 0.4), inset 0 0 12px rgba(255,255,255,0.10); }
-#screen-play[data-combo-tier="3"] #hud-combo { color: var(--violet); text-shadow: 0 0 12px rgba(180, 140, 255, 0.75); }
-#screen-play[data-combo-tier="4"] #lanes-overlay .lane::after { box-shadow: 0 0 26px rgba(210, 225, 255, 0.9); }
-#screen-play[data-combo-tier="4"] .judge-pad { box-shadow: 0 0 30px rgba(190, 215, 255, 0.55), inset 0 0 16px rgba(255,255,255,0.14); }
-#screen-play[data-combo-tier="4"] #hud-combo { color: var(--perfect); text-shadow: 0 0 16px rgba(230, 240, 255, 0.9); }
+/* Combo escalation stays extremely subtle: a touch more ambient light, never a flash. */
+#screen-play[data-combo-tier="1"] #lanes-overlay .lane::after { background: rgba(220, 230, 255, 0.24); }
+#screen-play[data-combo-tier="2"] #lanes-overlay .lane::after { background: rgba(220, 230, 255, 0.32); }
+#screen-play[data-combo-tier="2"] #hud-combo { color: var(--violet-soft); }
+#screen-play[data-combo-tier="3"] #lanes-overlay .lane::after { background: rgba(230, 235, 255, 0.42); }
+#screen-play[data-combo-tier="3"] #hud-combo { color: var(--silver); text-shadow: 0 0 10px rgba(220, 225, 255, 0.5); }
+#screen-play[data-combo-tier="4"] #lanes-overlay .lane::after { background: rgba(245, 248, 255, 0.55); }
+#screen-play[data-combo-tier="4"] #hud-combo { color: var(--silver); text-shadow: 0 0 14px rgba(230, 235, 255, 0.7); }
 
+/* Judgement text: brief and quiet, never a large persistent center label. */
 #hud-judge {
   position: absolute;
   left: 50%;
-  top: 68%;
+  top: 58%;
   transform: translate(-50%, -50%);
-  font-size: clamp(1rem, 3vw, 1.6rem);
-  font-weight: 800;
-  letter-spacing: 0.1em;
+  font-size: 0.95rem;
+  font-weight: 300;
+  letter-spacing: 0.16em;
   opacity: 0;
 }
-#hud-judge.show { animation: judgePop 0.32s ease-out; }
+#hud-judge.show { animation: judgePop 0.38s ease-out; }
 @keyframes judgePop {
-  0% { opacity: 0; transform: translate(-50%, -42%) scale(0.75); }
-  25% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
-  100% { opacity: 0; transform: translate(-50%, -55%) scale(1); }
+  0% { opacity: 0; transform: translate(-50%, -44%) scale(0.9); }
+  22% { opacity: 0.95; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -56%) scale(1); }
 }
-#hud-judge.PERFECT { color: var(--perfect); text-shadow: 0 0 6px #fff, 0 0 18px rgba(150, 200, 255, 0.9); animation-name: judgePopPerfect; }
-@keyframes judgePopPerfect {
-  0% { opacity: 0; transform: translate(-50%, -42%) scale(0.75); }
-  20% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); text-shadow: 0 0 12px #fff, 0 0 30px rgba(170, 210, 255, 1); }
-  100% { opacity: 0; transform: translate(-50%, -55%) scale(1); }
-}
-#hud-judge.GREAT { color: var(--great); text-shadow: 0 0 12px rgba(95, 208, 255, 0.85); }
-#hud-judge.GOOD { color: var(--good); text-shadow: 0 0 10px rgba(167, 139, 255, 0.8); }
-#hud-judge.MISS { color: var(--miss); text-shadow: 0 0 10px rgba(194, 58, 107, 0.75); }
+#hud-judge.PERFECT { color: var(--silver); text-shadow: 0 0 10px rgba(230, 235, 255, 0.65); }
+#hud-judge.GREAT { color: var(--blue-soft); text-shadow: 0 0 8px rgba(150, 180, 255, 0.5); }
+#hud-judge.GOOD { color: var(--violet-soft); text-shadow: 0 0 8px rgba(190, 170, 255, 0.45); }
+#hud-judge.MISS { color: var(--miss-soft); text-shadow: 0 0 8px rgba(200, 160, 190, 0.4); }
 
 #hud-progress {
   position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.06);
+  left: 0; right: 0; bottom: var(--safe-bottom);
+  height: 2px;
+  background: rgba(255, 255, 255, 0.05);
 }
 #hud-progress-bar {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, var(--blue-electric), var(--violet));
-  box-shadow: 0 0 8px rgba(140, 180, 255, 0.6);
+  background: linear-gradient(90deg, var(--blue-soft), var(--violet-soft));
+  opacity: 0.6;
 }
 
 .overlay {
   position: absolute; inset: 0;
   z-index: 10;
-  background: rgba(3, 4, 13, 0.72);
+  background: rgba(4, 6, 16, 0.78);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: calc(1rem + var(--safe-top)) calc(1rem + var(--safe-right)) calc(1rem + var(--safe-bottom)) calc(1rem + var(--safe-left));
 }
 .overlay.hidden { display: none; }
-/* Lives outside any .screen so it can appear over whichever screen is
-   active (e.g. select screen, while a song/audio load is in flight). */
+.overlay-panel h3 { margin: 0; letter-spacing: 0.14em; font-weight: 300; }
+.error-panel h3 { color: var(--miss-soft); }
+.error-panel p { opacity: 0.7; font-size: 0.82rem; max-width: 22rem; word-break: break-word; }
 #audio-error-overlay { position: fixed; z-index: 50; }
-.overlay-panel h3 { margin: 0; letter-spacing: 0.1em; }
-.error-panel h3 { color: var(--miss); text-shadow: 0 0 12px rgba(194, 58, 107, 0.7); }
-.error-panel p { opacity: 0.75; font-size: 0.85rem; max-width: 22rem; }
 
 /* ---------- Result ---------- */
-.result-panel { min-width: min(92vw, 26rem); }
+.result-panel { min-width: min(88vw, 22rem); }
 #result-rank {
-  font-size: clamp(2.6rem, 10vw, 5rem);
-  font-weight: 900;
-  background: linear-gradient(90deg, var(--perfect), var(--blue-cyan), var(--violet));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 0 16px rgba(140, 180, 255, 0.5));
+  font-size: clamp(2.4rem, 11vw, 4rem);
+  font-weight: 200;
+  color: var(--silver);
+  text-shadow: 0 0 20px rgba(200, 210, 255, 0.4);
 }
-#result-score-wrap span { opacity: 0.55; font-size: 0.75rem; letter-spacing: 0.18em; }
-#result-score { font-size: clamp(1.4rem, 4.4vw, 2.2rem); font-weight: 800; font-variant-numeric: tabular-nums; }
+#result-score-wrap span { opacity: 0.45; font-size: 0.72rem; letter-spacing: 0.2em; }
+#result-score { font-size: clamp(1.3rem, 5vw, 1.9rem); font-weight: 300; font-variant-numeric: tabular-nums; }
 #result-stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(110px, 1fr));
-  gap: 0.5rem 1.4rem;
+  grid-template-columns: repeat(2, minmax(100px, 1fr));
+  gap: 0.5rem 1.2rem;
 }
-.stat { display: flex; justify-content: space-between; gap: 1rem; min-width: 9rem; font-size: 0.9rem; }
-.stat .label { opacity: 0.55; font-size: 0.72rem; letter-spacing: 0.04em; }
-.stat .value { font-weight: 800; font-variant-numeric: tabular-nums; }
-.stat.perfect .value { color: var(--perfect); text-shadow: 0 0 8px rgba(200, 220, 255, 0.6); }
-.stat.great .value { color: var(--great); }
-.stat.good .value { color: var(--good); }
-.stat.miss .value { color: var(--miss); }
+.stat { display: flex; justify-content: space-between; gap: 1rem; min-width: 8.5rem; font-size: 0.85rem; }
+.stat .label { opacity: 0.45; font-size: 0.68rem; letter-spacing: 0.05em; }
+.stat .value { font-weight: 400; font-variant-numeric: tabular-nums; }
+.stat.perfect .value { color: var(--silver); }
+.stat.great .value { color: var(--blue-soft); }
+.stat.good .value { color: var(--violet-soft); }
+.stat.miss .value { color: var(--miss-soft); }
 .result-buttons { display: flex; gap: 1rem; margin-top: 0.4rem; }
 
-/* ---------- Orientation guard (phones only) ---------- */
-#rotate-overlay {
-  position: fixed; inset: 0;
-  z-index: 999;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-void);
-  color: var(--text);
-  text-align: center;
-  padding: 2rem;
-  font-size: 1.1rem;
-}
-@media (orientation: portrait) and (max-width: 820px) {
-  #rotate-overlay { display: flex; }
-}
-
-/* ---------- Small-height landscape phones (e.g. 667x375) ---------- */
-@media (max-height: 400px) {
-  .title-panel { margin-top: 6vh; padding: 1.1rem 1.4rem; }
-  .title-halo { top: 2%; width: 40vw; }
-  .glass-panel { padding: 1.1rem 1.4rem; gap: 0.6rem; }
-  #result-stats { gap: 0.3rem 1rem; }
+/* ---------- Small-height devices ---------- */
+@media (max-height: 700px) {
+  .veil-panel { padding: 1.2rem 1.4rem; gap: 0.6rem; }
+  #result-stats { gap: 0.3rem 0.9rem; }
 }

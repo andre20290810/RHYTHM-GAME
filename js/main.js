@@ -3,6 +3,7 @@ import { loadCatalog, loadManifest, loadChart } from "./songCatalog.js";
 import { RhythmGame } from "./game.js";
 import { Renderer } from "./renderer.js";
 import { InputController } from "./input.js";
+import { DebugPanel } from "./debugPanel.js";
 
 const screens = {
   title: document.getElementById("screen-title"),
@@ -17,7 +18,10 @@ function showScreen(name) {
   }
 }
 
+const debugPanel = new DebugPanel();
 const audioEngine = new AudioEngine();
+debugPanel.bindAudio(audioEngine.element);
+
 const canvas = document.getElementById("notes-canvas");
 const renderer = new Renderer(canvas);
 const laneElements = Array.from(document.querySelectorAll("#lanes-overlay .lane"));
@@ -40,6 +44,10 @@ async function init() {
     document.getElementById("select-song-title").textContent = currentManifest.title;
     document.getElementById("select-song-sub").textContent =
       `BPM ${Math.round(currentManifest.bpm)} / ${formatTime(currentManifest.durationSec)}`;
+    // Start buffering immediately (no gesture required just to load bytes -
+    // only the later .play() call needs to be inside a tap handler).
+    audioEngine.setSource(currentManifest.audioUrl);
+    debugPanel.checkMp3Status(currentManifest.audioUrl);
   } catch (err) {
     showAudioError(err.message);
   }
@@ -56,15 +64,20 @@ function formatTime(sec) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-document.getElementById("btn-start").addEventListener("click", async () => {
-  // iOS/Safari only allows the AudioContext to start as a direct result of
-  // a user gesture - unlock() must run synchronously from this tap, before
-  // any other await, or the context can end up permanently suspended.
+document.getElementById("btn-start").addEventListener("click", () => {
+  // Best-effort "prime" of the media element on the very first tap: some
+  // iOS Safari versions mark an element as user-activated only after its
+  // FIRST play() call happens inside a real gesture, which then makes a
+  // LATER programmatic play() (e.g. after choosing a difficulty) behave
+  // more reliably too. Errors here are ignored - the real, authoritative
+  // play() attempt (with full error handling) happens in startGame().
   try {
-    await audioEngine.unlock();
-  } catch (err) {
-    showAudioError(err.message);
-    return;
+    const p = audioEngine.element.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    audioEngine.element.pause();
+    audioEngine.element.currentTime = 0;
+  } catch (e) {
+    /* ignore - startGame() will surface any real failure */
   }
   showScreen("select");
 });
@@ -72,9 +85,9 @@ document.getElementById("btn-start").addEventListener("click", async () => {
 document.getElementById("btn-back-title").addEventListener("click", () => showScreen("title"));
 
 document.querySelectorAll(".btn-diff").forEach((btn) => {
-  btn.addEventListener("click", async () => {
+  btn.addEventListener("click", () => {
     currentDifficulty = btn.dataset.diff;
-    await startGame();
+    startGame();
   });
 });
 
@@ -102,19 +115,52 @@ function hideAudioError() {
   document.getElementById("audio-error-overlay").classList.add("hidden");
 }
 
-async function startGame() {
+// NOTE: this function is NOT async at the top - audioEngine.playFromGesture()
+// (which calls the native <audio>.play()) must be the very first thing it
+// does, called synchronously from the click handler above with zero
+// `await`s in between. iOS Safari requires the real DOM play() call to be
+// a direct, synchronous consequence of the user gesture; wrapping it in an
+// async function and awaiting other work first is exactly what silently
+// broke playback in the previous (AudioContext-based) version.
+function startGame() {
   hideAudioError();
 
-  // Load everything BEFORE switching to the play screen or starting the
-  // audio clock. A failed load must never result in a silent playthrough:
-  // show AUDIO LOAD ERROR and stop here instead of proceeding.
+  let playPromise;
   try {
-    if (!audioEngine.buffer || audioEngine._loadedUrl !== currentManifest.audioUrl) {
-      await audioEngine.load(currentManifest.audioUrl);
-      audioEngine._loadedUrl = currentManifest.audioUrl;
-    }
+    playPromise = audioEngine.playFromGesture();
+  } catch (syncErr) {
+    debugPanel.setPlayResult(`sync throw: ${syncErr}`);
+    showAudioError(`楽曲の再生開始に失敗しました: ${syncErr}`);
+    return;
+  }
+
+  if (!playPromise || typeof playPromise.then !== "function") {
+    // Very old browsers: play() returns undefined, nothing to await.
+    debugPanel.setPlayResult("no promise returned (legacy browser) - assuming started");
+    onPlaybackStarted();
+    return;
+  }
+
+  playPromise
+    .then(() => {
+      debugPanel.setPlayResult("resolved (playing)");
+      onPlaybackStarted();
+    })
+    .catch((err) => {
+      debugPanel.setPlayResult(`rejected: ${err && err.name}: ${err && err.message}`);
+      audioEngine.pause();
+      showAudioError(`楽曲の再生に失敗しました (${err && err.name}): ${err && err.message}`);
+    });
+}
+
+// Playback has actually started - now (and only now) load the chart and
+// switch to the play screen. A failed chart load stops the audio again
+// rather than leaving a silently-running track behind an error screen.
+async function onPlaybackStarted() {
+  try {
     currentChart = await loadChart(currentManifest, currentDifficulty);
   } catch (err) {
+    audioEngine.pause();
     showAudioError(err.message);
     return;
   }
@@ -133,7 +179,6 @@ async function startGame() {
   renderer.resize();
   window.addEventListener("resize", () => renderer.resize());
 
-  audioEngine.play(0);
   loop();
 }
 
@@ -164,14 +209,10 @@ function comboTierFor(combo) {
 function triggerPadEffect(lane) {
   const pad = judgePads[lane];
   if (!pad) return;
-  pad.classList.add("active");
   const ripple = pad.querySelector(".pad-ripple");
-  const particles = pad.querySelector(".pad-particles");
-  for (const el of [ripple, particles]) {
-    el.classList.remove("show");
-    void el.offsetWidth; // restart CSS animation
-    el.classList.add("show");
-  }
+  ripple.classList.remove("show");
+  void ripple.offsetWidth; // restart CSS animation
+  ripple.classList.add("show");
 }
 
 function handleLaneDown(lane) {
@@ -186,7 +227,6 @@ function handleLaneDown(lane) {
 function handleLaneUp(lane) {
   if (paused || !game) return;
   laneElements[lane].classList.remove("active");
-  judgePads[lane]?.classList.remove("active");
   game.laneUp(lane, audioEngine.currentTime);
 }
 
@@ -237,10 +277,10 @@ function loop() {
   renderer.draw(currentTime, game, comboTier);
   updateHud();
 
-  const progress = Math.min(1, currentTime / audioEngine.duration);
+  const progress = audioEngine.duration ? Math.min(1, currentTime / audioEngine.duration) : 0;
   document.getElementById("hud-progress-bar").style.width = `${progress * 100}%`;
 
-  const songEnded = currentTime >= audioEngine.duration - 0.05;
+  const songEnded = audioEngine.duration > 0 && currentTime >= audioEngine.duration - 0.05;
   if (game.finished || songEnded) {
     finishGame();
     return;

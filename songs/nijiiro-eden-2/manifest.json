@@ -1,0 +1,17 @@
+{
+  "id": "nijiiro-eden-2",
+  "title": "虹色のエデン2.0",
+  "artist": "",
+  "bpm": 136,
+  "offsetSec": 0.0,
+  "durationSec": 278.0,
+  "audio": "audio.mp3",
+  "background": {
+    "type": "none"
+  },
+  "difficulties": {
+    "EASY": "charts/easy.json",
+    "NORMAL": "charts/normal.json",
+    "HARD": "charts/hard.json"
+  }
+}

@@ -11,27 +11,35 @@
 <div id="app">
 
   <section id="screen-title" class="screen active">
-    <h1 class="title-logo">RHYTHM<span>GAME</span></h1>
-    <p class="subtitle">汎用ピアノタイル・リズムゲーム基盤</p>
-    <button id="btn-start" class="btn-primary">START</button>
-    <p class="rotate-hint">スマートフォンは横画面でお楽しみください</p>
+    <div class="title-halo" aria-hidden="true"></div>
+    <div class="glass-panel title-panel">
+      <h1 class="title-logo">RHYTHM<span>GAME</span></h1>
+      <p class="subtitle">汎用ホログラフィック・リズムゲーム基盤</p>
+      <button id="btn-start" class="btn-crystal">
+        <span class="btn-crystal-face">PLAY</span>
+      </button>
+      <p class="rotate-hint">スマートフォンは横画面でお楽しみください</p>
+    </div>
   </section>
 
   <section id="screen-select" class="screen">
-    <h2 id="select-song-title">Loading...</h2>
-    <p id="select-song-sub"></p>
-    <div class="difficulty-buttons">
-      <button class="btn-diff" data-diff="EASY">EASY</button>
-      <button class="btn-diff" data-diff="NORMAL">NORMAL</button>
-      <button class="btn-diff" data-diff="HARD">HARD</button>
+    <div class="glass-panel select-panel">
+      <h2 id="select-song-title">Loading...</h2>
+      <p id="select-song-sub"></p>
+      <div class="difficulty-buttons">
+        <button class="btn-diff" data-diff="EASY">EASY</button>
+        <button class="btn-diff" data-diff="NORMAL">NORMAL</button>
+        <button class="btn-diff" data-diff="HARD">HARD</button>
+      </div>
+      <button id="btn-back-title" class="btn-ghost">戻る</button>
     </div>
-    <button id="btn-back-title" class="btn-secondary">戻る</button>
   </section>
 
   <section id="screen-play" class="screen">
     <div id="bg-layer">
       <video id="bg-video" muted playsinline loop></video>
       <div id="bg-fallback"></div>
+      <div id="bg-dim"></div>
     </div>
 
     <div id="lanes-overlay">
@@ -43,6 +51,13 @@
 
     <canvas id="notes-canvas"></canvas>
 
+    <div id="judge-pads">
+      <div class="judge-pad" data-lane="0"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="1"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="2"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="3"><span class="pad-particles"></span><span class="pad-ripple"></span></div>
+    </div>
+
     <div id="touch-zones">
       <div class="touch-zone" data-lane="0"></div>
       <div class="touch-zone" data-lane="1"></div>
@@ -52,42 +67,55 @@
 
     <div id="hud">
       <div id="hud-top">
-        <div id="hud-score">0</div>
+        <div class="hud-glass" id="hud-score-wrap">
+          <span class="hud-label">SCORE</span>
+          <div id="hud-score">0</div>
+        </div>
+        <div class="hud-glass" id="hud-combo-wrap">
+          <div id="hud-combo"></div>
+        </div>
         <button id="btn-pause" class="btn-icon">Ⅱ</button>
-      </div>
-      <div id="hud-combo-wrap">
-        <div id="hud-combo"></div>
       </div>
       <div id="hud-judge"></div>
       <div id="hud-progress"><div id="hud-progress-bar"></div></div>
     </div>
 
     <div id="pause-overlay" class="overlay hidden">
-      <div class="overlay-panel">
+      <div class="glass-panel overlay-panel">
         <h3>PAUSE</h3>
-        <button id="btn-resume" class="btn-primary">つづける</button>
-        <button id="btn-quit" class="btn-secondary">やめる</button>
+        <button id="btn-resume" class="btn-crystal"><span class="btn-crystal-face">つづける</span></button>
+        <button id="btn-quit" class="btn-ghost">やめる</button>
       </div>
     </div>
   </section>
 
+  <div id="audio-error-overlay" class="overlay hidden">
+    <div class="glass-panel overlay-panel error-panel">
+      <h3>AUDIO LOAD ERROR</h3>
+      <p id="audio-error-detail"></p>
+      <button id="btn-audio-error-back" class="btn-ghost">曲選択へ戻る</button>
+    </div>
+  </div>
+
   <section id="screen-result" class="screen">
-    <h2>RESULT</h2>
-    <div id="result-rank"></div>
-    <div id="result-score-wrap">
-      <span>SCORE</span>
-      <div id="result-score">0</div>
-    </div>
-    <div id="result-stats">
-      <div class="stat"><span class="label">MAX COMBO</span><span id="result-maxcombo" class="value"></span></div>
-      <div class="stat perfect"><span class="label">PERFECT</span><span id="result-perfect" class="value"></span></div>
-      <div class="stat great"><span class="label">GREAT</span><span id="result-great" class="value"></span></div>
-      <div class="stat good"><span class="label">GOOD</span><span id="result-good" class="value"></span></div>
-      <div class="stat miss"><span class="label">MISS</span><span id="result-miss" class="value"></span></div>
-    </div>
-    <div class="result-buttons">
-      <button id="btn-retry" class="btn-primary">RETRY</button>
-      <button id="btn-to-select" class="btn-secondary">曲選択へ</button>
+    <div class="glass-panel result-panel">
+      <h2>RESULT</h2>
+      <div id="result-rank"></div>
+      <div id="result-score-wrap">
+        <span>SCORE</span>
+        <div id="result-score">0</div>
+      </div>
+      <div id="result-stats">
+        <div class="stat"><span class="label">MAX COMBO</span><span id="result-maxcombo" class="value"></span></div>
+        <div class="stat perfect"><span class="label">PERFECT</span><span id="result-perfect" class="value"></span></div>
+        <div class="stat great"><span class="label">GREAT</span><span id="result-great" class="value"></span></div>
+        <div class="stat good"><span class="label">GOOD</span><span id="result-good" class="value"></span></div>
+        <div class="stat miss"><span class="label">MISS</span><span id="result-miss" class="value"></span></div>
+      </div>
+      <div class="result-buttons">
+        <button id="btn-retry" class="btn-crystal"><span class="btn-crystal-face">RETRY</span></button>
+        <button id="btn-to-select" class="btn-ghost">曲選択へ</button>
+      </div>
     </div>
   </section>
 

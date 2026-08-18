@@ -3,7 +3,6 @@ import { loadCatalog, loadManifest, loadChart } from "./songCatalog.js";
 import { RhythmGame } from "./game.js";
 import { Renderer } from "./renderer.js";
 import { InputController } from "./input.js";
-import { LANE_COUNT } from "./constants.js";
 
 const screens = {
   title: document.getElementById("screen-title"),
@@ -23,6 +22,8 @@ const canvas = document.getElementById("notes-canvas");
 const renderer = new Renderer(canvas);
 const laneElements = Array.from(document.querySelectorAll("#lanes-overlay .lane"));
 const touchZones = Array.from(document.querySelectorAll("#touch-zones .touch-zone"));
+const judgePads = Array.from(document.querySelectorAll("#judge-pads .judge-pad"));
+const screenPlayEl = document.getElementById("screen-play");
 
 let currentManifest = null;
 let currentDifficulty = "NORMAL";
@@ -33,11 +34,15 @@ let paused = false;
 let input = null;
 
 async function init() {
-  const catalog = await loadCatalog();
-  currentManifest = await loadManifest(catalog[0]);
-  document.getElementById("select-song-title").textContent = currentManifest.title;
-  document.getElementById("select-song-sub").textContent =
-    `BPM ${Math.round(currentManifest.bpm)} / ${formatTime(currentManifest.durationSec)}`;
+  try {
+    const catalog = await loadCatalog();
+    currentManifest = await loadManifest(catalog[0]);
+    document.getElementById("select-song-title").textContent = currentManifest.title;
+    document.getElementById("select-song-sub").textContent =
+      `BPM ${Math.round(currentManifest.bpm)} / ${formatTime(currentManifest.durationSec)}`;
+  } catch (err) {
+    showAudioError(err.message);
+  }
 
   input = new InputController(touchZones, {
     onLaneDown: (lane) => handleLaneDown(lane),
@@ -52,7 +57,15 @@ function formatTime(sec) {
 }
 
 document.getElementById("btn-start").addEventListener("click", async () => {
-  await audioEngine.unlock();
+  // iOS/Safari only allows the AudioContext to start as a direct result of
+  // a user gesture - unlock() must run synchronously from this tap, before
+  // any other await, or the context can end up permanently suspended.
+  try {
+    await audioEngine.unlock();
+  } catch (err) {
+    showAudioError(err.message);
+    return;
+  }
   showScreen("select");
 });
 
@@ -76,21 +89,45 @@ document.getElementById("btn-quit").addEventListener("click", () => {
 
 document.getElementById("btn-retry").addEventListener("click", () => startGame());
 document.getElementById("btn-to-select").addEventListener("click", () => showScreen("select"));
+document.getElementById("btn-audio-error-back").addEventListener("click", () => {
+  hideAudioError();
+  showScreen("select");
+});
+
+function showAudioError(detail) {
+  document.getElementById("audio-error-detail").textContent = detail || "";
+  document.getElementById("audio-error-overlay").classList.remove("hidden");
+}
+function hideAudioError() {
+  document.getElementById("audio-error-overlay").classList.add("hidden");
+}
 
 async function startGame() {
+  hideAudioError();
+
+  // Load everything BEFORE switching to the play screen or starting the
+  // audio clock. A failed load must never result in a silent playthrough:
+  // show AUDIO LOAD ERROR and stop here instead of proceeding.
+  try {
+    if (!audioEngine.buffer || audioEngine._loadedUrl !== currentManifest.audioUrl) {
+      await audioEngine.load(currentManifest.audioUrl);
+      audioEngine._loadedUrl = currentManifest.audioUrl;
+    }
+    currentChart = await loadChart(currentManifest, currentDifficulty);
+  } catch (err) {
+    showAudioError(err.message);
+    return;
+  }
+
   showScreen("play");
   document.getElementById("hud-score").textContent = "0";
-  document.getElementById("hud-combo").classList.remove("show");
+  document.getElementById("hud-combo-wrap").classList.remove("show");
   document.getElementById("pause-overlay").classList.add("hidden");
+  screenPlayEl.dataset.comboTier = "0";
   paused = false;
 
   setupBackground();
 
-  if (!audioEngine.buffer || audioEngine._loadedUrl !== currentManifest.audioUrl) {
-    await audioEngine.load(currentManifest.audioUrl);
-    audioEngine._loadedUrl = currentManifest.audioUrl;
-  }
-  currentChart = await loadChart(currentManifest, currentDifficulty);
   game = new RhythmGame(currentChart);
 
   renderer.resize();
@@ -116,9 +153,31 @@ function setupBackground() {
   }
 }
 
+function comboTierFor(combo) {
+  if (combo >= 100) return 4;
+  if (combo >= 50) return 3;
+  if (combo >= 25) return 2;
+  if (combo >= 10) return 1;
+  return 0;
+}
+
+function triggerPadEffect(lane) {
+  const pad = judgePads[lane];
+  if (!pad) return;
+  pad.classList.add("active");
+  const ripple = pad.querySelector(".pad-ripple");
+  const particles = pad.querySelector(".pad-particles");
+  for (const el of [ripple, particles]) {
+    el.classList.remove("show");
+    void el.offsetWidth; // restart CSS animation
+    el.classList.add("show");
+  }
+}
+
 function handleLaneDown(lane) {
   if (paused || !game) return;
   laneElements[lane].classList.add("active");
+  triggerPadEffect(lane);
   const grade = game.laneDown(lane, audioEngine.currentTime);
   if (grade) showJudgePopup(grade);
   updateHud();
@@ -127,6 +186,7 @@ function handleLaneDown(lane) {
 function handleLaneUp(lane) {
   if (paused || !game) return;
   laneElements[lane].classList.remove("active");
+  judgePads[lane]?.classList.remove("active");
   game.laneUp(lane, audioEngine.currentTime);
 }
 
@@ -134,20 +194,21 @@ function showJudgePopup(grade) {
   const el = document.getElementById("hud-judge");
   el.textContent = grade;
   el.className = grade;
-  // restart CSS animation
-  void el.offsetWidth;
+  void el.offsetWidth; // restart CSS animation
   el.classList.add("show");
 }
 
 function updateHud() {
   document.getElementById("hud-score").textContent = Math.round(game.score).toLocaleString();
+  const comboWrap = document.getElementById("hud-combo-wrap");
   const comboEl = document.getElementById("hud-combo");
   if (game.combo >= 2) {
     comboEl.textContent = `${game.combo} COMBO`;
-    comboEl.classList.add("show");
+    comboWrap.classList.add("show");
   } else {
-    comboEl.classList.remove("show");
+    comboWrap.classList.remove("show");
   }
+  screenPlayEl.dataset.comboTier = String(comboTierFor(game.combo));
 }
 
 function setPaused(value) {
@@ -172,7 +233,8 @@ function loop() {
   if (paused) return;
   const currentTime = audioEngine.currentTime;
   game.update(currentTime);
-  renderer.draw(currentTime, game);
+  const comboTier = comboTierFor(game.combo);
+  renderer.draw(currentTime, game, comboTier);
   updateHud();
 
   const progress = Math.min(1, currentTime / audioEngine.duration);

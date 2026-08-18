@@ -2,6 +2,13 @@
 // The whole game reads "now" from here (AudioContext.currentTime based),
 // never from requestAnimationFrame deltas, so dropped rendering frames
 // never desync notes from the music - only the audio clock is the truth.
+//
+// iOS Safari only allows an AudioContext to start/resume as a direct
+// consequence of a user gesture (tap/click). The context is therefore
+// created and resumed EAGERLY inside unlock(), which must be called
+// synchronously from the very first tap handler (see main.js's
+// "btn-start" listener) - not lazily inside load(), which usually runs
+// later after async fetch/decode work and can lose the gesture.
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -14,28 +21,59 @@ export class AudioEngine {
     this._pausedAtSec = 0;
   }
 
-  async load(url) {
+  ensureContext() {
     if (!this.ctx) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) throw new Error("この端末のブラウザはWeb Audio APIに対応していません");
       this.ctx = new Ctx();
       this.gainNode = this.ctx.createGain();
       this.gainNode.connect(this.ctx.destination);
     }
-    const res = await fetch(url);
-    const arrayBuffer = await res.arrayBuffer();
-    this.buffer = await this.ctx.decodeAudioData(arrayBuffer);
-    return this.buffer.duration;
+    return this.ctx;
   }
 
+  /** Must be called synchronously from a user-gesture handler (tap/click). */
   async unlock() {
-    // Must be called from a user-gesture handler (tap/click) for iOS/Safari.
-    if (this.ctx && this.ctx.state === "suspended") {
-      await this.ctx.resume();
+    const ctx = this.ensureContext();
+    if (ctx.state === "suspended") {
+      await ctx.resume();
     }
+    // Some iOS Safari versions only fully unlock the audio pipeline after a
+    // buffer has actually been started once inside the gesture; a silent
+    // 1-sample buffer is enough and costs nothing audible.
+    const primer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = primer;
+    src.connect(ctx.destination);
+    src.start(0);
+  }
+
+  async load(url) {
+    this.ensureContext();
+    let res;
+    try {
+      res = await fetch(url);
+    } catch (e) {
+      throw new Error(`楽曲ファイルの取得に失敗しました (network error): ${url}`);
+    }
+    if (!res.ok) {
+      throw new Error(`楽曲ファイルの取得に失敗しました (HTTP ${res.status}): ${url}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error(`楽曲ファイルが空です: ${url}`);
+    }
+    try {
+      this.buffer = await this.ctx.decodeAudioData(arrayBuffer);
+    } catch (e) {
+      throw new Error(`楽曲のデコードに失敗しました (decodeAudioData): ${url}`);
+    }
+    return this.buffer.duration;
   }
 
   play(fromSec = 0) {
     if (!this.buffer) return;
+    if (this.ctx.state === "suspended") this.ctx.resume();
     this._stopSource();
     this.source = this.ctx.createBufferSource();
     this.source.buffer = this.buffer;

@@ -5,15 +5,29 @@
 // code changes.
 const BASE = "songs/";
 
+async function fetchJson(url) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    throw new Error(`データの取得に失敗しました (network error): ${url}`);
+  }
+  if (!res.ok) {
+    throw new Error(`データの取得に失敗しました (HTTP ${res.status}): ${url}`);
+  }
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error(`データの解析に失敗しました (invalid JSON): ${url}`);
+  }
+}
+
 export async function loadCatalog() {
-  const res = await fetch(`${BASE}index.json`);
-  const list = await res.json();
-  return list; // [{ id, manifest }]
+  return fetchJson(`${BASE}index.json`); // [{ id, manifest }]
 }
 
 export async function loadManifest(entry) {
-  const res = await fetch(`${BASE}${entry.manifest}`);
-  const manifest = await res.json();
+  const manifest = await fetchJson(`${BASE}${entry.manifest}`);
   const dir = entry.manifest.substring(0, entry.manifest.lastIndexOf("/") + 1);
   return {
     ...manifest,
@@ -29,7 +43,5 @@ export async function loadManifest(entry) {
 export async function loadChart(manifest, difficulty) {
   const rel = manifest.difficulties[difficulty];
   if (!rel) throw new Error(`No chart for difficulty ${difficulty}`);
-  const res = await fetch(`${manifest._dir}${rel}`);
-  const chart = await res.json();
-  return chart; // { difficulty, bpm, duration_sec, notes: [{time, lane, type, duration?}] }
+  return fetchJson(`${manifest._dir}${rel}`); // { difficulty, bpm, duration_sec, notes: [...] }
 }

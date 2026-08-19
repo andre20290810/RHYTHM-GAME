@@ -12,9 +12,29 @@ const screens = {
   result: document.getElementById("screen-result"),
 };
 
+// The title screen's own looping background video - entirely separate
+// from the per-song R2 background video used in #screen-play (different
+// element, different manifest, never touches audio.mp3 or the game's own
+// background video state). Always muted; this is picture-only.
+const titleBgVideo = document.getElementById("title-bg-video");
+
 function showScreen(name) {
   for (const key of Object.keys(screens)) {
     screens[key].classList.toggle("active", key === name);
+  }
+  if (name === "title") {
+    // Always restart from 0 on (re)entering the title screen, so the loop
+    // begins cleanly every time rather than resuming mid-loop.
+    try {
+      titleBgVideo.currentTime = 0;
+    } catch (e) {
+      /* not seekable yet (metadata still loading) - fine, it starts at 0 anyway */
+    }
+    titleBgVideo.muted = true;
+    const p = titleBgVideo.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } else {
+    titleBgVideo.pause();
   }
 }
 
@@ -85,6 +105,11 @@ async function init() {
   } catch (err) {
     showAudioError(err.message);
   }
+
+  // Kick off the title screen's own looping background video - muted
+  // autoplay doesn't need a user gesture, so this can start right away
+  // rather than waiting for the first tap.
+  showScreen("title");
 
   input = new InputController(touchZones, {
     onLaneDown: (lane) => handleLaneDown(lane),

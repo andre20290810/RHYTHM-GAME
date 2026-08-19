@@ -18,8 +18,12 @@ export const LANE_COUNT = 4;
 export const LANE_KEYS = ["KeyD", "KeyF", "KeyJ", "KeyK"];
 
 // Seconds a note takes to travel from the top of the lane to the judgement
-// line. Bigger = notes fall slower / more reaction time.
-export const NOTE_TRAVEL_SEC = 1.6;
+// line. Bigger = notes fall slower / more reaction time. Raised from 1.6
+// to 1.8 for more general breathing room; combined with the pre-roll
+// lead-in in main.js (PRE_ROLL_SEC), this is what lets even the chart's
+// very first note get a real look before it's judged. Purely a rendering
+// constant - js/game.js never reads it, so this never touches judge timing.
+export const NOTE_TRAVEL_SEC = 1.8;
 
 // Max achievable score (classic rhythm-game convention: always normalized
 // to the same ceiling regardless of how many notes a chart has).

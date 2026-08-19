@@ -37,6 +37,14 @@ let rafId = null;
 let paused = false;
 let input = null;
 
+// Silent, visual-only "get ready" lead-in shown before real playback
+// begins - see loop()'s pre-roll handling for the full explanation. Never
+// changes note.time, judge windows, or audio.currentTime's role as the
+// judge basis; only delays when audio.currentTime starts advancing.
+const PRE_ROLL_SEC = 1.5;
+let preRollRemainingSec = null; // null = not in the pre-roll phase
+let preRollLastFrameMs = null;
+
 const bgVideo = document.getElementById("bg-video");
 const bgFallback = document.getElementById("bg-fallback");
 // Enforced in JS too - never rely on the HTML `muted` attribute alone. The
@@ -164,6 +172,17 @@ function startGame() {
   playPromise
     .then(() => {
       debugPanel.setPlayResult("resolved (playing)");
+      // The promise resolving IS the real iOS unlock already happening -
+      // holding here, immediately, at the very start of the track (rather
+      // than after the chart JSON below finishes loading) keeps the
+      // silent pre-roll from being preceded by an audible blip of the
+      // song's first fraction of a second. resume() later reuses this
+      // same unlock, exactly like the existing pause/resume feature does.
+      // (Pausing any earlier, before this promise settles, is not safe:
+      // some browsers reject an in-flight play() with AbortError if
+      // pause() is called before it resolves.)
+      audioEngine.pause();
+      audioEngine.element.currentTime = 0;
       onPlaybackStarted();
     })
     .catch((err) => {
@@ -192,7 +211,7 @@ async function onPlaybackStarted() {
   screenPlayEl.dataset.comboTier = "0";
   paused = false;
 
-  startBackgroundVideo();
+  prepareBackgroundVideo();
 
   game = new RhythmGame(currentChart);
 
@@ -200,6 +219,11 @@ async function onPlaybackStarted() {
   window.addEventListener("resize", () => renderer.resize());
 
   lastDriftCheckMs = 0;
+  // See PRE_ROLL_SEC / loop(): real audio playback (and the video) only
+  // actually starts once this silent, visual-only lead-in finishes, so
+  // even the chart's very first note gets a real look before judgment.
+  preRollRemainingSec = PRE_ROLL_SEC;
+  preRollLastFrameMs = null;
   loop();
 }
 
@@ -207,7 +231,13 @@ async function onPlaybackStarted() {
 // audio.mp3 keeps driving the chart via audioEngine.currentTime regardless
 // of whether the video loads, plays, or fails. A load/play failure falls
 // back to the existing CSS gradient background without stopping the game.
-function startBackgroundVideo() {
+//
+// This only readies the element (visible, rewound to 0) - it deliberately
+// does NOT call .play() here. Actual playback starts later via
+// playBackgroundVideoIfActive(), at the same moment real audio playback
+// resumes (see loop()'s pre-roll handling), so the video never starts
+// animating ahead of the audio during the silent pre-roll countdown.
+function prepareBackgroundVideo() {
   if (!currentManifest.backgroundUrl) {
     bgVideo.style.display = "none";
     bgFallback.style.display = "block";
@@ -219,15 +249,6 @@ function startBackgroundVideo() {
     bgVideo.currentTime = 0;
   } catch (e) {
     /* not seekable yet (metadata still loading) - fine, it starts at 0 anyway */
-  }
-  const p = bgVideo.play();
-  if (p && typeof p.catch === "function") {
-    p.catch((err) => {
-      console.warn("[bg-video] play() rejected, falling back to CSS background", err);
-      debugPanel.setVideoError(`play() rejected: ${err && err.name}: ${err && err.message}`);
-      bgVideo.style.display = "none";
-      bgFallback.style.display = "block";
-    });
   }
 }
 
@@ -241,7 +262,7 @@ function startBackgroundVideo() {
 // how (or whether) the picture-only video is nudged back in sync.
 //
 // Correction is OFF by default: the video simply free-runs from the
-// moment it starts (see startBackgroundVideo), which avoids the jank
+// moment it starts (see playBackgroundVideoIfActive), which avoids the jank
 // entirely. A ~4-5 minute track can accumulate aperceptible but usually
 // unobtrusive drift this way; if that turns out to matter more than the
 // stutter did, flip ENABLE_VIDEO_DRIFT_CORRECTION back on - the threshold
@@ -337,6 +358,19 @@ function isVideoActive() {
   return !!currentManifest.backgroundUrl && bgVideo.style.display !== "none";
 }
 
+function playBackgroundVideoIfActive() {
+  if (!isVideoActive()) return;
+  const p = bgVideo.play();
+  if (p && typeof p.catch === "function") {
+    p.catch((err) => {
+      console.warn("[bg-video] play() rejected, falling back to CSS background", err);
+      debugPanel.setVideoError(`play() rejected: ${err && err.name}: ${err && err.message}`);
+      bgVideo.style.display = "none";
+      bgFallback.style.display = "block";
+    });
+  }
+}
+
 function setPaused(value) {
   paused = value;
   document.getElementById("pause-overlay").classList.toggle("hidden", !value);
@@ -344,12 +378,15 @@ function setPaused(value) {
     audioEngine.pause();
     if (isVideoActive()) bgVideo.pause();
     if (rafId) cancelAnimationFrame(rafId);
+    // Don't let the pre-roll countdown "jump forward" by however long the
+    // player stayed paused - see the dt calc in loop() below.
+    preRollLastFrameMs = null;
   } else {
-    audioEngine.resume();
-    if (isVideoActive()) {
-      const p = bgVideo.play();
-      if (p && typeof p.catch === "function") p.catch(() => {});
-    }
+    // Real playback only actually resumes once any pre-roll countdown has
+    // finished (loop() below drives that) - pausing/resuming mid-pre-roll
+    // must not skip straight into audible playback.
+    if (preRollRemainingSec === null) audioEngine.resume();
+    playBackgroundVideoIfActive();
     loop();
   }
 }
@@ -359,10 +396,39 @@ function stopGame() {
   if (isVideoActive()) bgVideo.pause();
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
+  preRollRemainingSec = null;
+  preRollLastFrameMs = null;
 }
 
+// Visual-only "get ready" lead-in shown before real playback begins, so
+// even the chart's very first note gets a real look before it's judged
+// (see PRE_ROLL_SEC). It never touches note.time, the judge windows, or
+// audio.currentTime's role as the judge basis - it only delays the moment
+// audio.currentTime starts advancing from 0, using the exact same
+// pause()-now/resume()-later unlock the pause/resume feature already
+// relies on. game.update()/laneDown() are not called during this phase,
+// so no note can be judged (missed or hit) before it truly begins.
 function loop() {
   if (paused) return;
+
+  if (preRollRemainingSec !== null) {
+    const nowMs = performance.now();
+    const dt = preRollLastFrameMs === null ? 0 : (nowMs - preRollLastFrameMs) / 1000;
+    preRollLastFrameMs = nowMs;
+    preRollRemainingSec -= dt;
+
+    if (preRollRemainingSec <= 0) {
+      preRollRemainingSec = null;
+      preRollLastFrameMs = null;
+      audioEngine.resume();
+      playBackgroundVideoIfActive();
+    } else {
+      renderer.draw(-preRollRemainingSec, game, 0);
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+  }
+
   const currentTime = audioEngine.currentTime;
   game.update(currentTime);
   const comboTier = comboTierFor(game.combo);

@@ -1,24 +1,51 @@
 import { LANE_COUNT, NOTE_TRAVEL_SEC } from "./constants.js";
 
-// Tap notes are drawn from the user's own arrow-icon artwork (untouched
-// pixels - only the on-screen draw size is scaled, aspect ratio locked).
-// Loaded once and reused for every note/frame; never re-fetched per draw.
-const NOTE_ICON_WIDTH_RATIO = 0.62; // fraction of one lane's width
-const ARROW_BLUE_SRC = "assets/notes/note-blue.png";
-const ARROW_GREEN_SRC = "assets/notes/note-hit-green.png";
+// Every note element (falling tap notes, the HOLD head, and success
+// flashes) shares one drawn-not-pasted "crystal shard" shape - a
+// horizontal faceted lozenge, not a rounded rectangle, not an arrow icon,
+// not an octagon badge. Nothing here is an image; every pixel is Canvas
+// path/gradient/stroke/shadowBlur, so it always sits correctly over
+// whatever the background video is doing underneath it.
+const NOTE_W_RATIO = 0.66; // shard width as a fraction of one lane's width
+const NOTE_ASPECT = 0.46; // height = width * this - keeps it "wide, not tall"
+const HOLD_RIBBON_W_RATIO = 0.4; // HOLD body width as a fraction of lane width - wide enough to read as a body, not a thin line
 
-// Per-grade strength of the success flash (icon hold time + sparkle count
-// and duration). MISS never reaches this table - see triggerHitEffect().
+// Explicit per-note particle/echo budget so a busy HARD chart can't creep
+// this up over time - kept small and fixed regardless of chart density.
+// A falling tap note draws at most: 1 halo + MAX_TRAIL_ECHOES shard
+// echoes + MAX_TRAIL_PARTICLES light specks + 1 occasional arc flicker +
+// the shard core itself (fill/rim/facet/core, 4 draws) - roughly a dozen
+// draw calls per note per frame, independent of how many notes are
+// on-screen at once. See _drawCrystalNote().
+const MAX_TRAIL_ECHOES = 3;
+const MAX_TRAIL_PARTICLES = 4;
+
+// Per-grade strength of the success burst (core-flare/ring hold time,
+// sparkle/ember count, duration). MISS never reaches this table - see
+// triggerHitEffect(). sparkleCount + emberCount is the max particle count
+// for a single success burst (PERFECT: 10 + 6 = 16) - short-lived
+// (<=0.55s) and only ever one at a time per lane, so this budget is kept
+// separate from (and larger than) the continuous per-falling-note one.
 const HIT_EFFECT_BY_GRADE = {
-  PERFECT: { iconSec: 0.32, sparkleSec: 0.48, sparkleCount: 8, glow: 1.0, flashSec: 0.12 },
-  GREAT: { iconSec: 0.26, sparkleSec: 0.36, sparkleCount: 6, glow: 0.75, flashSec: 0.08 },
-  GOOD: { iconSec: 0.18, sparkleSec: 0.22, sparkleCount: 3, glow: 0.45, flashSec: 0 },
+  PERFECT: { flareSec: 0.34, ringSec: 0.32, ring2Sec: 0.5, sparkleSec: 0.55, sparkleCount: 10, emberCount: 6, glow: 1.0, flashSec: 0.14 },
+  GREAT: { flareSec: 0.27, ringSec: 0.26, ring2Sec: 0, sparkleSec: 0.4, sparkleCount: 7, emberCount: 3, glow: 0.75, flashSec: 0.09 },
+  GOOD: { flareSec: 0.18, ringSec: 0.16, ring2Sec: 0, sparkleSec: 0.24, sparkleCount: 4, emberCount: 0, glow: 0.45, flashSec: 0 },
 };
 
-function loadImage(src) {
-  const img = new Image();
-  img.src = src;
-  return img;
+// Builds the shared crystal-shard path (a horizontal faceted hexagon)
+// centered at (cx, cy) with the given bounding width/height. Callers fill
+// and/or stroke it themselves so the same silhouette can carry different
+// glow intensities (falling vs. HOLD head vs. brighter-while-held).
+function crystalPath(ctx, cx, cy, w, h) {
+  const hw = w / 2, hh = h / 2;
+  ctx.beginPath();
+  ctx.moveTo(cx - hw, cy);
+  ctx.lineTo(cx - hw * 0.42, cy - hh);
+  ctx.lineTo(cx + hw * 0.42, cy - hh);
+  ctx.lineTo(cx + hw, cy);
+  ctx.lineTo(cx + hw * 0.42, cy + hh);
+  ctx.lineTo(cx - hw * 0.42, cy + hh);
+  ctx.closePath();
 }
 
 // Draws the playfield onto a canvas that sits ABOVE the background video
@@ -32,10 +59,6 @@ export class Renderer {
     this.ctx = canvas.getContext("2d");
     // Must stay in sync with the `top: 82%` on .judge-pad in css/style.css.
     this.judgeLineRatio = 0.82;
-
-    // Preloaded once at startup so drawImage() never re-decodes per frame.
-    this.arrowBlueImg = loadImage(ARROW_BLUE_SRC);
-    this.arrowGreenImg = loadImage(ARROW_GREEN_SRC);
 
     // Short-lived success flashes triggered by triggerHitEffect(); each
     // entry is { lane, grade, startTime, cfg }, pruned once fully faded.
@@ -92,7 +115,7 @@ export class Renderer {
 
       const y = this.yForTime(note.time, currentTime);
       if (y < -44 || y > this.height + 44) continue;
-      this._drawFallingArrow(x, y, note, currentTime);
+      this._drawCrystalNote(x, y, note, currentTime);
     }
 
     this._drawHitEffects(currentTime);
@@ -132,11 +155,12 @@ export class Renderer {
     return Math.max(0, t - 0.4) / 0.6;
   }
 
-  // HOLD notes get their own visual language, not the tap arrow alone and
-  // not a plain bar: a blue-arrow HEAD (the same icon as a tap note) with
-  // an upward energy ribbon running to a small crystal TAIL marker, so the
-  // note reads as "press and hold this far" as soon as any part of it is
-  // on screen - not a bare head with zero warning it needs a long press.
+  // HOLD notes get their own visual language, not the tap crystal alone and
+  // not a plain bar: the same drawn crystal-shard HEAD (see crystalPath)
+  // as a tap note, plus a small collar ring where an upward energy ribbon
+  // attaches and runs to a small crystal TAIL marker - so the note reads
+  // as "press and hold this far" as soon as any part of it is on screen,
+  // not a bare head with zero warning it needs a long press.
   //
   // Gating in draw() only requires the HEAD to be on screen (see the
   // `headY < -60` check there); the ribbon/tail simply get canvas-clipped
@@ -144,65 +168,87 @@ export class Renderer {
   // element - no separate visibility bug to introduce here.
   _drawHoldNote(x, headY, tailY, note, currentTime) {
     const ctx = this.ctx;
-    const img = this.arrowBlueImg;
-    const size = this._arrowDrawSize(img);
     const cx = x + this.laneWidth / 2;
     const holding = note.state === "holding";
-    const boost = this._proximityBoost(headY);
-    const ribbonW = this.laneWidth * 0.22;
+    const headBoost = this._proximityBoost(headY);
+    const tailBoost = this._proximityBoost(tailY);
+    const headW = this.laneWidth * NOTE_W_RATIO;
+    const headH = headW * NOTE_ASPECT;
+    const ribbonW = this.laneWidth * HOLD_RIBBON_W_RATIO;
     const bandTop = Math.max(tailY, -4);
     const bandBottom = headY;
     const bandLen = Math.max(1, bandBottom - bandTop);
 
     ctx.save();
 
-    // the ribbon: a soft vertical gradient, brighter near the head and
-    // brighter still while actually being held correctly
-    const baseAlpha = holding ? 0.5 : 0.28;
+    // while correctly held, the whole lane gets a soft vertical energy
+    // wash behind everything else - not "a bit brighter", a lane-wide
+    // glow that reads instantly as "this lane is active" (item 4)
+    if (holding) {
+      const laneGlow = ctx.createLinearGradient(cx, bandTop, cx, bandBottom);
+      laneGlow.addColorStop(0, "rgba(150,190,255,0.03)");
+      laneGlow.addColorStop(1, "rgba(170,205,255,0.16)");
+      ctx.fillStyle = laneGlow;
+      ctx.fillRect(x + this.laneWidth * 0.06, bandTop, this.laneWidth * 0.88, bandBottom - bandTop);
+    }
+
+    // BODY: a wide ribbon with two bright rim edges plus a bright core
+    // line - its own silhouette has to read as "long press this far" even
+    // before the player notices the head, not just a decorated head with
+    // a thin line trailing off (item 2/3)
+    const baseAlpha = holding ? 0.62 : 0.32;
     const ribbonGrad = ctx.createLinearGradient(cx, bandTop, cx, bandBottom);
-    ribbonGrad.addColorStop(0, `rgba(150,190,255,${baseAlpha * 0.35})`);
-    ribbonGrad.addColorStop(1, `rgba(180,210,255,${baseAlpha})`);
+    ribbonGrad.addColorStop(0, `rgba(150,190,255,${baseAlpha * 0.4})`);
+    ribbonGrad.addColorStop(1, `rgba(190,205,255,${baseAlpha})`);
     ctx.fillStyle = ribbonGrad;
     ctx.fillRect(cx - ribbonW / 2, bandTop, ribbonW, bandBottom - bandTop);
 
-    // thin bright core line down the middle
-    ctx.strokeStyle = `rgba(230,240,255,${holding ? 0.85 : 0.55})`;
-    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = `rgba(220,235,255,${holding ? 0.75 : 0.42})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(cx - ribbonW / 2, bandTop);
+    ctx.lineTo(cx - ribbonW / 2, bandBottom);
+    ctx.moveTo(cx + ribbonW / 2, bandTop);
+    ctx.lineTo(cx + ribbonW / 2, bandBottom);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(235,244,255,${holding ? 0.9 : 0.6})`;
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.moveTo(cx, bandTop);
     ctx.lineTo(cx, bandBottom);
     ctx.stroke();
 
-    // energy flowing along the ribbon toward the head - 2 soft glints
+    // energy flowing along the body toward the head - 2 soft glints
     // recomputed from a time-based phase each frame, no particle pool
-    const flowSpeed = holding ? 2.2 : 1.4;
+    const flowSpeed = holding ? 2.6 : 1.4;
     for (let i = 0; i < 2; i++) {
       const phase = ((currentTime * flowSpeed + i * 0.5 + note.id * 0.13) % 1 + 1) % 1;
       const py = bandTop + phase * bandLen;
-      const pulseGrad = ctx.createRadialGradient(cx, py, 0, cx, py, ribbonW * 1.3);
-      pulseGrad.addColorStop(0, `rgba(255,255,255,${holding ? 0.55 : 0.3})`);
+      const pulseGrad = ctx.createRadialGradient(cx, py, 0, cx, py, ribbonW * 0.9);
+      pulseGrad.addColorStop(0, `rgba(255,255,255,${holding ? 0.65 : 0.32})`);
       pulseGrad.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = pulseGrad;
       ctx.beginPath();
-      ctx.arc(cx, py, ribbonW * 1.3, 0, Math.PI * 2);
+      ctx.arc(cx, py, ribbonW * 0.9, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // ribbon clipped by the top edge gets a soft fade cap instead of an
+    // body clipped by the top edge gets a soft fade cap instead of an
     // abrupt cutoff - reads as "this continues upward, keep watching"
     if (tailY < 0) {
       const capLen = Math.min(40, bandLen);
       const capGrad = ctx.createLinearGradient(cx, 0, cx, capLen);
-      capGrad.addColorStop(0, `rgba(190,215,255,${holding ? 0.5 : 0.3})`);
+      capGrad.addColorStop(0, `rgba(190,215,255,${holding ? 0.55 : 0.32})`);
       capGrad.addColorStop(1, "rgba(190,215,255,0)");
       ctx.fillStyle = capGrad;
       ctx.fillRect(cx - ribbonW / 2, 0, ribbonW, capLen);
     }
 
     // a brief, quiet glow the moment the head first enters the screen
-    if (headY > -60 && headY < -20 && size) {
+    if (headY > -60 && headY < -20) {
       const t = (headY + 60) / 40;
-      const r = size.w * (0.9 - 0.3 * t);
+      const r = headW * (0.9 - 0.3 * t);
       const introGrad = ctx.createRadialGradient(cx, headY, 0, cx, headY, r);
       introGrad.addColorStop(0, `rgba(200,225,255,${0.25 * (1 - t)})`);
       introGrad.addColorStop(1, "rgba(200,225,255,0)");
@@ -212,13 +258,42 @@ export class Renderer {
       ctx.fill();
     }
 
-    // TAIL marker - a small crystal terminal, drawn once it is on screen
+    // TAIL: an explicit end-gate, not just a small marker - a glowing bar
+    // with inward brackets ("here is where it ends") plus a small crystal
+    // terminal. Brightens on its own as it nears the judge line, and once
+    // RELEASE becomes viable it pulses in sync with a matching flash on
+    // the judge line itself, so "let go now" reads as one unmistakable
+    // cue (item 3). RELEASE_TOLERANCE_SEC in game.js is untouched - this
+    // is a purely visual approach cue, not a judge-timing change.
     if (tailY >= -20 && tailY <= this.height + 20) {
-      const tr = holding ? 7.5 : 6;
+      const gateW = ribbonW * 2.1;
+      const releasePulse = tailBoost > 0.55 ? (tailBoost - 0.55) / 0.45 : 0; // 0..1, only in the final approach
+      const syncPhase = 0.5 + 0.5 * Math.sin(currentTime * 9);
+      const gateAlpha = (holding ? 0.85 : 0.6) + releasePulse * syncPhase * 0.4;
+
+      ctx.save();
+      ctx.shadowColor = "rgba(190,220,255,0.85)";
+      ctx.shadowBlur = 5 + tailBoost * 8;
+      ctx.strokeStyle = `rgba(225,240,255,${gateAlpha})`;
+      ctx.lineWidth = 2 + tailBoost;
+      ctx.beginPath();
+      ctx.moveTo(cx - gateW / 2, tailY);
+      ctx.lineTo(cx + gateW / 2, tailY);
+      ctx.stroke();
+      const bracket = 5 + tailBoost * 3;
+      ctx.beginPath();
+      ctx.moveTo(cx - gateW / 2, tailY - bracket);
+      ctx.lineTo(cx - gateW / 2, tailY + bracket);
+      ctx.moveTo(cx + gateW / 2, tailY - bracket);
+      ctx.lineTo(cx + gateW / 2, tailY + bracket);
+      ctx.stroke();
+      ctx.restore();
+
+      const tr = (holding ? 6.5 : 5.5) + tailBoost * 2;
       ctx.save();
       ctx.shadowColor = "rgba(190,220,255,0.8)";
-      ctx.shadowBlur = 6;
-      ctx.fillStyle = `rgba(225,238,255,${holding ? 0.95 : 0.75})`;
+      ctx.shadowBlur = 4 + tailBoost * 6;
+      ctx.fillStyle = `rgba(230,240,255,${gateAlpha})`;
       ctx.beginPath();
       ctx.moveTo(cx, tailY - tr);
       ctx.lineTo(cx + tr * 0.62, tailY);
@@ -227,109 +302,194 @@ export class Renderer {
       ctx.closePath();
       ctx.fill();
       ctx.restore();
+
+      // synchronized flash on the judge line itself, right as RELEASE
+      // becomes viable - ties the tail and the judge line together
+      if (releasePulse > 0) {
+        ctx.save();
+        ctx.globalAlpha = releasePulse * syncPhase * 0.5;
+        const syncGlow = ctx.createRadialGradient(cx, this.judgeY, 0, cx, this.judgeY, headW * 0.55);
+        syncGlow.addColorStop(0, "rgba(225,240,255,0.9)");
+        syncGlow.addColorStop(1, "rgba(225,240,255,0)");
+        ctx.fillStyle = syncGlow;
+        ctx.beginPath();
+        ctx.arc(cx, this.judgeY, headW * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
-    // HEAD - the same blue arrow icon as a tap note, brighter and softly
-    // pulsing while actively (correctly) held
-    if (size) {
-      ctx.globalAlpha = 1;
-      ctx.shadowColor = holding ? "rgba(180,215,255,0.9)" : "rgba(160,200,255,0.6)";
-      ctx.shadowBlur = (holding ? 8 : 4) + boost * (holding ? 9 : 6);
-      ctx.drawImage(img, cx - size.w / 2, headY - size.h / 2, size.w, size.h);
+    // a small bright collar ring where the body meets the HEAD - the one
+    // shape detail a tap note never has, so a HOLD head is identifiable
+    // at a glance even though it shares the same crystal silhouette
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = `rgba(225,240,255,${holding ? 0.9 : 0.6})`;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.ellipse(cx, headY - headH * 0.5, ribbonW * 0.6, ribbonW * 0.26, 0, 0, Math.PI * 2);
+    ctx.stroke();
 
-      if (holding) {
-        const pulse = 0.5 + 0.5 * Math.sin(currentTime * 6 + note.id);
-        ctx.shadowBlur = 0;
-        ctx.globalAlpha = 0.18 + pulse * 0.14;
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.beginPath();
-        ctx.arc(cx, headY, size.w * 0.55, 0, Math.PI * 2);
-        ctx.fill();
+    // HEAD - the same drawn crystal shard as a tap note, brighter and
+    // softly pulsing while actively (correctly) held
+    ctx.shadowColor = holding ? "rgba(180,215,255,0.9)" : "rgba(160,200,255,0.6)";
+    this._drawShardCore(cx, headY, headW, headH, holding ? 1.7 : 1, headBoost);
 
-        // weak glow where the held lane meets the judge line
-        ctx.globalAlpha = 0.25 + pulse * 0.15;
-        const lineGlow = ctx.createRadialGradient(cx, this.judgeY, 0, cx, this.judgeY, size.w * 0.6);
-        lineGlow.addColorStop(0, "rgba(210,230,255,0.7)");
-        lineGlow.addColorStop(1, "rgba(210,230,255,0)");
-        ctx.fillStyle = lineGlow;
-        ctx.beginPath();
-        ctx.arc(cx, this.judgeY, size.w * 0.6, 0, Math.PI * 2);
-        ctx.fill();
-      }
+    if (holding) {
+      const pulse = 0.5 + 0.5 * Math.sin(currentTime * 6 + note.id);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 0.22 + pulse * 0.18;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(cx, headY, headW * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // glow where the held lane meets the judge line - a clearly
+      // stronger baseline than the falling state so "currently holding
+      // correctly" is unmistakable, not just "a bit brighter" (item 4)
+      ctx.globalAlpha = 0.32 + pulse * 0.2;
+      const lineGlow = ctx.createRadialGradient(cx, this.judgeY, 0, cx, this.judgeY, headW * 0.7);
+      lineGlow.addColorStop(0, "rgba(210,230,255,0.8)");
+      lineGlow.addColorStop(1, "rgba(210,230,255,0)");
+      ctx.fillStyle = lineGlow;
+      ctx.beginPath();
+      ctx.arc(cx, this.judgeY, headW * 0.7, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     ctx.restore();
   }
 
-  // Arrow's on-screen size for a given lane, aspect ratio locked to the
-  // source PNG's own dimensions (no cropping/stretching of the artwork).
-  _arrowDrawSize(img) {
-    if (!img.naturalWidth) return null; // not decoded yet this frame
-    const w = this.laneWidth * NOTE_ICON_WIDTH_RATIO;
-    const h = w * (img.naturalHeight / img.naturalWidth);
-    return { w, h };
+  // Renders just the crystal-shard body (glass fill + bright rim + a
+  // facet shine + a small pulsing core) at a given center/size - shared by
+  // every note element so a tap note, a HOLD head, and a brighter-while-
+  // held HOLD head all read as the same material, not three unrelated
+  // shapes. glowMul scales the rim glow/line-width (HOLD-while-holding
+  // uses a stronger value); alphaBoost is the 0..1 judge-line-proximity
+  // term from _proximityBoost().
+  _drawShardCore(cx, cy, w, h, glowMul, alphaBoost) {
+    const ctx = this.ctx;
+    crystalPath(ctx, cx, cy, w, h);
+
+    const fillGrad = ctx.createLinearGradient(cx, cy - h / 2, cx, cy + h / 2);
+    fillGrad.addColorStop(0, `rgba(210,222,255,${0.16 + alphaBoost * 0.14})`);
+    fillGrad.addColorStop(0.5, `rgba(255,255,255,${0.22 + alphaBoost * 0.2})`);
+    fillGrad.addColorStop(1, `rgba(180,165,255,${0.16 + alphaBoost * 0.14})`);
+    ctx.fillStyle = fillGrad;
+    ctx.fill();
+
+    ctx.shadowBlur = (5 + alphaBoost * 9) * glowMul;
+    const rimGrad = ctx.createLinearGradient(cx - w / 2, cy, cx + w / 2, cy);
+    rimGrad.addColorStop(0, "rgba(170,200,255,0.85)");
+    rimGrad.addColorStop(0.5, "rgba(245,248,255,0.98)");
+    rimGrad.addColorStop(1, "rgba(200,175,255,0.85)");
+    ctx.strokeStyle = rimGrad;
+    ctx.lineWidth = (1.4 + alphaBoost * 0.8) * Math.min(1.4, glowMul);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // a short bright facet highlight near the upper edge - a glass "shine"
+    ctx.globalAlpha = 0.4 + alphaBoost * 0.3;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.28, cy - h * 0.42);
+    ctx.lineTo(cx - w * 0.05, cy - h * 0.5);
+    ctx.stroke();
+
+    // pulsating light core at the center
+    const coreR = (3 + alphaBoost * 2.5) * Math.min(1.3, glowMul);
+    ctx.globalAlpha = 0.55 + alphaBoost * 0.3;
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - coreR);
+    ctx.lineTo(cx + coreR * 0.6, cy);
+    ctx.lineTo(cx, cy + coreR);
+    ctx.lineTo(cx - coreR * 0.6, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
-  // Falling tap-note visual: the user's own blue arrow icon plus a quiet
-  // Canvas-only glow/afterimage/particle treatment that gets a little
-  // stronger as the note nears the judge line. The source image's pixels
-  // are never filtered or tinted - only drawImage()'d at a fixed size.
-  _drawFallingArrow(x, y, note, currentTime) {
-    const img = this.arrowBlueImg;
-    const size = this._arrowDrawSize(img);
-    if (!size) return;
+  // Falling tap-note visual: a drawn crystal shard (see crystalPath /
+  // _drawShardCore) - blue/blue-violet/silver, translucent, faceted, wide
+  // rather than tall - plus a quiet Canvas-only glow/echo/particle
+  // treatment that gets a little stronger as the note nears the judge
+  // line. Nothing here is an image; every pixel is path/gradient/stroke.
+  _drawCrystalNote(x, y, note, currentTime) {
     const ctx = this.ctx;
     const cx = x + this.laneWidth / 2;
     const cy = y;
     const boost = this._proximityBoost(cy);
+    const w = this.laneWidth * NOTE_W_RATIO;
+    const h = w * NOTE_ASPECT;
     const t = currentTime + note.id; // cheap per-note phase, no stored state
 
     ctx.save();
 
-    // soft halo behind the icon, brightening on approach
-    const haloR = size.w * (0.55 + boost * 0.25);
+    // soft halo behind the shard, brightening on approach - keeps it from
+    // getting lost against a bright/busy background video
+    const haloR = w * (0.62 + boost * 0.32);
     const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
-    halo.addColorStop(0, `rgba(150,195,255,${0.22 + boost * 0.22})`);
-    halo.addColorStop(1, "rgba(150,195,255,0)");
+    halo.addColorStop(0, `rgba(165,195,255,${0.22 + boost * 0.24})`);
+    halo.addColorStop(1, "rgba(165,195,255,0)");
     ctx.fillStyle = halo;
     ctx.beginPath();
     ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
     ctx.fill();
 
-    // short backward (upward) afterimage - two faint ghost copies, cheaper
-    // than a blur filter and just as readable as "a light trail"
-    ctx.globalAlpha = 0.10;
-    ctx.drawImage(img, cx - size.w / 2, cy - size.h * 1.35 - size.h / 2, size.w, size.h);
-    ctx.globalAlpha = 0.16;
-    ctx.drawImage(img, cx - size.w / 2, cy - size.h * 0.7 - size.h / 2, size.w, size.h);
-
-    // a couple of tiny trailing light particles, cheap deterministic motion
-    ctx.globalAlpha = 0.5 + boost * 0.3;
-    ctx.fillStyle = "rgba(210,230,255,0.9)";
-    for (let i = 0; i < 2; i++) {
-      const wobble = Math.sin(t * 5 + i * 2.1) * size.w * 0.12;
-      const py = cy - size.h * (0.55 + i * 0.35);
-      ctx.beginPath();
-      ctx.arc(cx + wobble, py, 1.3, 0, Math.PI * 2);
+    // longer upward light trail - MAX_TRAIL_ECHOES fainter/smaller copies
+    // of the same shard shape (alternating blue-white / blue-violet), a
+    // cheap vector redraw standing in for a blur trail (item 5)
+    for (let i = 0; i < MAX_TRAIL_ECHOES; i++) {
+      const echoScale = 1 - i * 0.14;
+      const echoY = cy - h * (1.0 + i * 0.85);
+      ctx.globalAlpha = (0.11 - i * 0.03) * (0.6 + boost * 0.4);
+      ctx.fillStyle = i % 2 === 0 ? "rgba(190,210,255,1)" : "rgba(205,190,255,1)";
+      crystalPath(ctx, cx, echoY, w * echoScale, h * echoScale);
       ctx.fill();
     }
-
-    // weak pulsating glow layered under the icon center
-    const pulse = 0.5 + 0.5 * Math.sin(t * 4);
-    ctx.globalAlpha = 0.12 + boost * 0.18 + pulse * 0.08;
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.beginPath();
-    ctx.arc(cx, cy, size.w * 0.18, 0, Math.PI * 2);
-    ctx.fill();
-
-    // the icon itself - untouched pixels, size-only scale, glow only
-    // right near the judge line so shadowBlur stays rare, not per-frame-always
     ctx.globalAlpha = 1;
-    if (boost > 0) {
-      ctx.shadowColor = "rgba(160,200,255,0.7)";
-      ctx.shadowBlur = 4 + boost * 6;
+
+    // MAX_TRAIL_PARTICLES tiny drifting light specks - fine light debris
+    // caught in the shard's wake, deterministic per-note motion so
+    // nothing needs to be stored between frames
+    for (let i = 0; i < MAX_TRAIL_PARTICLES; i++) {
+      const seed = i * 1.7;
+      const wobble = Math.sin(t * 4.5 + seed) * w * (0.16 + i * 0.03);
+      const py = cy - h * (0.9 + i * 0.55) - Math.abs(Math.sin(t * 2 + seed)) * h * 0.3;
+      const r = 0.9 + (i % 2) * 0.6;
+      ctx.globalAlpha = (0.32 + boost * 0.3) * (0.55 + 0.45 * Math.sin(t * 6 + seed));
+      ctx.fillStyle = i % 2 === 0 ? "rgba(210,225,255,0.9)" : "rgba(200,185,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(cx + wobble, py, r, 0, Math.PI * 2);
+      ctx.fill();
     }
-    ctx.drawImage(img, cx - size.w / 2, cy - size.h / 2, size.w, size.h);
+    ctx.globalAlpha = 1;
+
+    // a weak, occasional electric-arc flicker near the shard - only
+    // visible a fraction of the time (deterministic per-note/per-time
+    // gate, no timer state) so it reads as "weak" rather than a constant
+    // buzz around every note
+    if (Math.sin(t * 3.3 + note.id * 2.7) > 0.72) {
+      const ay = cy - h * 0.1;
+      ctx.globalAlpha = 0.35 + boost * 0.25;
+      ctx.strokeStyle = "rgba(220,230,255,0.9)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - w * 0.3, ay - h * 0.15);
+      ctx.lineTo(cx - w * 0.12, ay + h * 0.08);
+      ctx.lineTo(cx - w * 0.02, ay - h * 0.05);
+      ctx.moveTo(cx + w * 0.3, ay + h * 0.1);
+      ctx.lineTo(cx + w * 0.12, ay - h * 0.08);
+      ctx.lineTo(cx + w * 0.02, ay + h * 0.05);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // the shard itself - glow only ramps up near the judge line so
+    // shadowBlur stays rare, not a per-frame-always cost
+    ctx.shadowColor = "rgba(170,195,255,0.75)";
+    this._drawShardCore(cx, cy, w, h, 1, boost);
 
     ctx.restore();
   }
@@ -339,33 +499,70 @@ export class Renderer {
   // it. Strength (icon hold time, sparkle count, glow) scales with grade.
   // Nothing is stored across frames beyond the small hitEffects list -
   // each burst is recomputed from (progress, count), never pooled objects.
+  // Nothing here is an image overlay - success reads through light alone:
+  // a silver-to-blue-green core flare, an expanding ring, a brief white
+  // flash, and a star-glint sparkle burst, all pure Canvas draws.
   _drawHitEffects(currentTime) {
     if (!this.hitEffects.length) return;
     const ctx = this.ctx;
-    const img = this.arrowGreenImg;
-    const size = this._arrowDrawSize(img);
     this.hitEffects = this.hitEffects.filter((fx) => {
       const elapsed = currentTime - fx.startTime;
-      const life = Math.max(fx.cfg.iconSec, fx.cfg.sparkleSec);
+      const life = Math.max(fx.cfg.flareSec, fx.cfg.ringSec, fx.cfg.ring2Sec, fx.cfg.sparkleSec);
       if (elapsed < 0 || elapsed > life) return false;
 
       const cx = fx.lane * this.laneWidth + this.laneWidth / 2;
       const cy = this.judgeY;
 
-      if (size && elapsed <= fx.cfg.iconSec) {
-        const t = elapsed / fx.cfg.iconSec;
+      if (elapsed <= fx.cfg.flareSec) {
+        const t = elapsed / fx.cfg.flareSec;
+        const r = this.laneWidth * (0.24 - t * 0.06);
         ctx.save();
-        ctx.globalAlpha = 1 - t * 0.35;
-        ctx.shadowColor = "rgba(170,255,210,0.85)";
-        ctx.shadowBlur = 10 * fx.cfg.glow;
-        ctx.drawImage(img, cx - size.w / 2, cy - size.h / 2, size.w, size.h);
+        const flareGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        flareGrad.addColorStop(0, `rgba(235,255,248,${(1 - t) * 0.9})`);
+        flareGrad.addColorStop(0.5, `rgba(190,255,225,${(1 - t) * 0.55 * fx.cfg.glow})`);
+        flareGrad.addColorStop(1, "rgba(190,255,225,0)");
+        ctx.fillStyle = flareGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      if (elapsed <= fx.cfg.ringSec) {
+        const t = elapsed / fx.cfg.ringSec;
+        ctx.save();
+        const r = this.laneWidth * 0.2 + t * this.laneWidth * 0.5;
+        ctx.globalAlpha = (1 - t) * 0.75;
+        ctx.strokeStyle = "rgba(205,255,232,0.9)";
+        ctx.lineWidth = 2.2 * (1 - t) + 0.5;
+        ctx.shadowColor = "rgba(180,255,220,0.8)";
+        ctx.shadowBlur = 6 * fx.cfg.glow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // a second, larger/slower ring for PERFECT only (ring2Sec is 0 for
+      // GREAT/GOOD) - the "double ring" is part of what makes PERFECT
+      // read as noticeably more festive than the other grades
+      if (fx.cfg.ring2Sec && elapsed <= fx.cfg.ring2Sec) {
+        const t = elapsed / fx.cfg.ring2Sec;
+        ctx.save();
+        const r = this.laneWidth * 0.32 + t * this.laneWidth * 0.85;
+        ctx.globalAlpha = (1 - t) * 0.4;
+        ctx.strokeStyle = "rgba(220,255,240,0.85)";
+        ctx.lineWidth = 1.4 * (1 - t) + 0.4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.restore();
       }
 
       if (fx.cfg.flashSec && elapsed <= fx.cfg.flashSec) {
         const t = elapsed / fx.cfg.flashSec;
         ctx.save();
-        const r = (size ? size.w : this.laneWidth * 0.5) * (0.3 + t * 0.5);
+        const r = this.laneWidth * 0.5 * (0.3 + t * 0.5);
         const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
         grad.addColorStop(0, `rgba(255,255,255,${0.55 * (1 - t)})`);
         grad.addColorStop(1, "rgba(255,255,255,0)");
@@ -378,25 +575,33 @@ export class Renderer {
 
       if (elapsed <= fx.cfg.sparkleSec) {
         this._drawSparkleBurst(cx, cy, elapsed / fx.cfg.sparkleSec, fx.cfg.sparkleCount);
+        // upward-drifting embers, PERFECT/GREAT only (emberCount is 0 for
+        // GOOD, which stays deliberately restrained - see item 6)
+        if (fx.cfg.emberCount) {
+          this._drawEmbers(cx, cy, elapsed / fx.cfg.sparkleSec, fx.cfg.emberCount);
+        }
       }
 
       return true;
     });
   }
 
-  // A handful of small star/cross-shaped glints expanding outward from a
+  // A handful of small star/cross-shaped glints - a mix of larger and
+  // smaller ones ("大小の星型グリント") - expanding outward from a
   // success flash, then fading.
   _drawSparkleBurst(cx, cy, progress, count) {
     const ctx = this.ctx;
-    const spread = 6 + progress * 26;
+    const spread = 6 + progress * 30;
     const fade = 1 - progress;
     const colors = ["rgba(255,255,255,0.95)", "rgba(200,230,255,0.9)", "rgba(190,255,220,0.85)"];
     ctx.save();
     for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count + progress * 1.5;
-      const px = cx + Math.cos(angle) * spread;
-      const py = cy + Math.sin(angle) * spread;
-      const r = (1.5 + (i % 3)) * (0.5 + fade * 0.5);
+      const angle = (Math.PI * 2 * i) / count + progress * 1.6;
+      const big = i % 3 === 0;
+      const dist = spread * (big ? 1.15 : 0.9);
+      const px = cx + Math.cos(angle) * dist;
+      const py = cy + Math.sin(angle) * dist;
+      const r = (big ? 3.0 : 1.4 + (i % 2) * 0.6) * (0.5 + fade * 0.5);
       ctx.globalAlpha = fade;
       ctx.fillStyle = colors[i % colors.length];
       ctx.beginPath();
@@ -409,6 +614,30 @@ export class Renderer {
       ctx.lineTo(px - r, py);
       ctx.lineTo(px - r * 0.35, py - r * 0.35);
       ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // A few small embers that drift outward and upward from a success burst
+  // (PERFECT/GREAT only), fading as they rise ("一部の粒子が上方向へ舞
+  // う"). Positions are recomputed each frame from (progress, i), not
+  // stored, so nothing needs a particle pool.
+  _drawEmbers(cx, cy, progress, count) {
+    const ctx = this.ctx;
+    const fade = 1 - progress;
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const seed = i * 2.399963; // golden-angle-ish, deterministic spread
+      const side = Math.sin(seed) * 1.3; // spread left/right
+      const dist = 8 + progress * 30;
+      const px = cx + side * dist;
+      const py = cy - progress * (18 + (i % 3) * 6) - Math.abs(side) * dist * 0.3;
+      const r = 1.0 + (i % 2) * 0.7;
+      ctx.globalAlpha = fade * 0.85;
+      ctx.fillStyle = i % 2 === 0 ? "rgba(215,255,235,0.9)" : "rgba(200,225,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();

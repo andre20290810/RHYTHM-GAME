@@ -26,17 +26,24 @@ export async function loadCatalog() {
   return fetchJson(`${BASE}index.json`); // [{ id, manifest }]
 }
 
+const ABSOLUTE_URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 export async function loadManifest(entry) {
   const manifest = await fetchJson(`${BASE}${entry.manifest}`);
   const dir = entry.manifest.substring(0, entry.manifest.lastIndexOf("/") + 1);
+  let backgroundUrl = null;
+  if (manifest.background && manifest.background.type === "video") {
+    const src = manifest.background.src;
+    // A background video may be hosted externally (e.g. a CDN/object store)
+    // instead of living in this repo - used as-is when it's already an
+    // absolute URL, otherwise resolved relative to the song's folder.
+    backgroundUrl = ABSOLUTE_URL_RE.test(src) ? src : `${BASE}${dir}${src}`;
+  }
   return {
     ...manifest,
     _dir: `${BASE}${dir}`,
     audioUrl: `${BASE}${dir}${manifest.audio}`,
-    backgroundUrl:
-      manifest.background && manifest.background.type === "video"
-        ? `${BASE}${dir}${manifest.background.src}`
-        : null,
+    backgroundUrl,
   };
 }
 

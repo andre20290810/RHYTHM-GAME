@@ -8,6 +8,7 @@ export class DebugPanel {
     this.enabled = new URLSearchParams(location.search).has("debug");
     this.el = null;
     this.audioEl = null;
+    this.videoEl = null;
     this.extra = {};
     if (!this.enabled) return;
 
@@ -48,14 +49,26 @@ export class DebugPanel {
     this.audioEl = audioEl;
   }
 
+  bindVideo(videoEl, url) {
+    this.videoEl = videoEl;
+    this.extra.videoUrl = url;
+    this.render();
+  }
+
   setPlayResult(text) {
     this.extra.playResult = text;
+    this.render();
+  }
+
+  setVideoError(text) {
+    this.extra.videoError = text;
     this.render();
   }
 
   render() {
     if (!this.enabled || !this.el) return;
     const a = this.audioEl;
+    const v = this.videoEl;
     const lines = [
       `UA: ${this.extra.userAgent || ""}`,
       `AudioContext.state: ${this.extra.audioContextState}`,
@@ -71,6 +84,15 @@ export class DebugPanel {
       `muted: ${a ? a.muted : "-"}`,
       `volume: ${a ? a.volume : "-"}`,
       `error: ${a && a.error ? `code ${a.error.code}` : "none"}`,
+      "--- <video> background element ---",
+      `video URL: ${this.extra.videoUrl || "(none - CSS fallback)"}`,
+      `video readyState: ${v ? `${v.readyState} (${READY_STATES[v.readyState] || "?"})` : "-"}`,
+      `video networkState: ${v ? `${v.networkState} (${NETWORK_STATES[v.networkState] || "?"})` : "-"}`,
+      `video duration: ${v ? v.duration : "-"}`,
+      `video currentTime: ${v ? v.currentTime.toFixed(3) : "-"}`,
+      `video paused: ${v ? v.paused : "-"}`,
+      `video error: ${v && v.error ? `MediaError code ${v.error.code}` : "none"}`,
+      `video error (from play()/event): ${this.extra.videoError || "none"}`,
     ];
     this.el.textContent = lines.join("\n");
   }

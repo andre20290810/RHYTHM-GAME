@@ -37,6 +37,25 @@ let rafId = null;
 let paused = false;
 let input = null;
 
+const bgVideo = document.getElementById("bg-video");
+const bgFallback = document.getElementById("bg-fallback");
+// Enforced in JS too - never rely on the HTML `muted` attribute alone. The
+// video is picture-only; audio.mp3 (via AudioEngine) is the only audible
+// source and the only timing master.
+bgVideo.muted = true;
+bgVideo.volume = 0;
+
+bgVideo.addEventListener("error", () => {
+  const code = bgVideo.error ? bgVideo.error.code : "?";
+  console.error("[bg-video] load/playback error, falling back to CSS background", bgVideo.error);
+  debugPanel.setVideoError(`error event (MediaError code ${code})`);
+  bgVideo.style.display = "none";
+  bgFallback.style.display = "block";
+});
+bgVideo.addEventListener("playing", () => {
+  bgFallback.style.display = "none";
+});
+
 async function init() {
   try {
     const catalog = await loadCatalog();
@@ -48,6 +67,14 @@ async function init() {
     // only the later .play() call needs to be inside a tap handler).
     audioEngine.setSource(currentManifest.audioUrl);
     debugPanel.checkMp3Status(currentManifest.audioUrl);
+
+    if (currentManifest.backgroundUrl) {
+      bgVideo.src = currentManifest.backgroundUrl;
+      debugPanel.bindVideo(bgVideo, currentManifest.backgroundUrl);
+    } else {
+      bgVideo.style.display = "none";
+      bgFallback.style.display = "block";
+    }
   } catch (err) {
     showAudioError(err.message);
   }
@@ -172,29 +199,61 @@ async function onPlaybackStarted() {
   screenPlayEl.dataset.comboTier = "0";
   paused = false;
 
-  setupBackground();
+  startBackgroundVideo();
 
   game = new RhythmGame(currentChart);
 
   renderer.resize();
   window.addEventListener("resize", () => renderer.resize());
 
+  lastDriftCheckMs = 0;
   loop();
 }
 
-function setupBackground() {
-  const video = document.getElementById("bg-video");
-  const fallback = document.getElementById("bg-fallback");
-  if (currentManifest.backgroundUrl) {
-    video.src = currentManifest.backgroundUrl;
-    video.style.display = "block";
-    fallback.style.display = "none";
-    video.currentTime = 0;
-    video.play().catch(() => {});
-  } else {
-    video.removeAttribute("src");
-    video.style.display = "none";
-    fallback.style.display = "block";
+// The background video is picture-only and never the timing/audio master:
+// audio.mp3 keeps driving the chart via audioEngine.currentTime regardless
+// of whether the video loads, plays, or fails. A load/play failure falls
+// back to the existing CSS gradient background without stopping the game.
+function startBackgroundVideo() {
+  if (!currentManifest.backgroundUrl) {
+    bgVideo.style.display = "none";
+    bgFallback.style.display = "block";
+    return;
+  }
+  bgFallback.style.display = "block"; // stays visible as a safety net until 'playing' fires
+  bgVideo.style.display = "block";
+  try {
+    bgVideo.currentTime = 0;
+  } catch (e) {
+    /* not seekable yet (metadata still loading) - fine, it starts at 0 anyway */
+  }
+  const p = bgVideo.play();
+  if (p && typeof p.catch === "function") {
+    p.catch((err) => {
+      console.warn("[bg-video] play() rejected, falling back to CSS background", err);
+      debugPanel.setVideoError(`play() rejected: ${err && err.name}: ${err && err.message}`);
+      bgVideo.style.display = "none";
+      bgFallback.style.display = "block";
+    });
+  }
+}
+
+const VIDEO_DRIFT_THRESHOLD_SEC = 0.2; // correct only beyond this much drift
+const VIDEO_DRIFT_CHECK_MS = 500; // throttled - never resynced every frame
+let lastDriftCheckMs = 0;
+
+function maybeCorrectVideoDrift(currentTime, nowMs) {
+  if (!currentManifest.backgroundUrl || bgVideo.style.display === "none") return;
+  if (bgVideo.readyState < 2 || bgVideo.paused || bgVideo.seeking) return;
+  if (nowMs - lastDriftCheckMs < VIDEO_DRIFT_CHECK_MS) return;
+  lastDriftCheckMs = nowMs;
+  const drift = Math.abs(bgVideo.currentTime - currentTime);
+  if (drift > VIDEO_DRIFT_THRESHOLD_SEC) {
+    try {
+      bgVideo.currentTime = currentTime;
+    } catch (e) {
+      /* ignore - will retry on the next check */
+    }
   }
 }
 
@@ -251,20 +310,30 @@ function updateHud() {
   screenPlayEl.dataset.comboTier = String(comboTierFor(game.combo));
 }
 
+function isVideoActive() {
+  return !!currentManifest.backgroundUrl && bgVideo.style.display !== "none";
+}
+
 function setPaused(value) {
   paused = value;
   document.getElementById("pause-overlay").classList.toggle("hidden", !value);
   if (value) {
     audioEngine.pause();
+    if (isVideoActive()) bgVideo.pause();
     if (rafId) cancelAnimationFrame(rafId);
   } else {
     audioEngine.resume();
+    if (isVideoActive()) {
+      const p = bgVideo.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
     loop();
   }
 }
 
 function stopGame() {
   audioEngine.stop();
+  if (isVideoActive()) bgVideo.pause();
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
 }
@@ -276,6 +345,7 @@ function loop() {
   const comboTier = comboTierFor(game.combo);
   renderer.draw(currentTime, game, comboTier);
   updateHud();
+  maybeCorrectVideoDrift(currentTime, performance.now());
 
   const progress = audioEngine.duration ? Math.min(1, currentTime / audioEngine.duration) : 0;
   document.getElementById("hud-progress-bar").style.width = `${progress * 100}%`;
@@ -308,6 +378,7 @@ init();
 if (new URLSearchParams(location.search).has("debug")) {
   window.__debug = {
     audioEngine,
+    bgVideo,
     getGame: () => game,
     getManifest: () => currentManifest,
   };

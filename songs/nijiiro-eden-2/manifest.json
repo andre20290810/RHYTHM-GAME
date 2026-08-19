@@ -7,7 +7,8 @@
   "durationSec": 278.0,
   "audio": "audio.mp3",
   "background": {
-    "type": "none"
+    "type": "video",
+    "src": "https://pub-fe2b7ec648804636bd6e616bd4ffe4e2.r2.dev/copy_2E8903AC-7BCF-407C-A8F3-5D54F5A23469.mov"
   },
   "difficulties": {
     "EASY": "charts/easy.json",

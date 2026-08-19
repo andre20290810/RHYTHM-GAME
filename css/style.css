@@ -84,6 +84,14 @@ html, body {
 }
 .screen.active { display: flex; }
 
+/* Title/select sit over a portrait character portrait whose face falls in
+   the upper-middle of the frame - content is anchored to the BOTTOM of the
+   screen (not centered) so it never sits over the face. */
+#screen-title, #screen-select {
+  justify-content: flex-end;
+  padding-bottom: calc(5vh + var(--safe-bottom));
+}
+
 /* ---------- Reference-image backgrounds (title / select) ----------
    The attached artwork is used unmodified as a background image; only a
    CSS gradient is layered on top (in the DOM, not on the pixels) so text
@@ -117,19 +125,29 @@ html, body {
   max-width: min(92vw, 24rem);
 }
 
-/* ---------- Title ---------- */
-.title-panel { margin-top: auto; margin-bottom: auto; }
+/* ---------- Title ----------
+   No panel/box behind the title - it sits directly on the artwork, relying
+   on the image's own bottom gradient (see #title-bg) plus a dark drop
+   shadow for legibility, so the character underneath stays fully visible. */
+.title-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.4rem;
+}
 
 .title-logo {
-  font-size: clamp(2rem, 9vw, 2.8rem);
-  font-weight: 200;
-  letter-spacing: 0.16em;
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", "Hiragino Mincho ProN", serif;
+  font-style: italic;
+  font-size: clamp(1.8rem, 8.4vw, 2.6rem);
+  font-weight: 400;
+  letter-spacing: 0.02em;
   margin: 0;
   color: var(--ink);
-  text-shadow: 0 0 24px rgba(150, 170, 255, 0.35);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.85), 0 0 26px rgba(160, 180, 255, 0.35);
 }
-.title-logo span { display: block; font-size: 0.48em; opacity: 0.75; letter-spacing: 0.42em; font-weight: 200; margin-top: 0.3em; }
-.subtitle { opacity: 0.5; margin: 0; font-size: 0.8rem; letter-spacing: 0.08em; font-weight: 300; }
 
 /* ---------- Quiet buttons: hairline outline, soft glow only, no motion loops ---------- */
 .btn-veil, .btn-text, .btn-diff, .btn-icon {
@@ -191,7 +209,6 @@ html, body {
 }
 
 /* ---------- Select ---------- */
-.select-panel { margin-top: auto; margin-bottom: auto; }
 #select-song-title { margin: 0; font-size: 1.15rem; font-weight: 300; letter-spacing: 0.05em; }
 #select-song-sub { opacity: 0.45; margin: 0; font-size: 0.78rem; }
 .difficulty-buttons { display: flex; gap: 0.7rem; flex-wrap: wrap; justify-content: center; }
@@ -241,12 +258,13 @@ html, body {
 #lanes-overlay .lane:not(:last-child)::after {
   content: "";
   position: absolute;
-  top: 6%; right: 0; bottom: 6%;
+  top: 4%; right: 0; bottom: 4%;
   width: 1px;
-  background: var(--hairline);
+  background: rgba(215, 226, 255, 0.22);
+  box-shadow: 0 0 4px rgba(160, 190, 255, 0.15);
 }
 #lanes-overlay .lane.active {
-  background: rgba(210, 220, 255, 0.035);
+  background: rgba(210, 220, 255, 0.05);
 }
 
 #notes-canvas {
@@ -256,30 +274,40 @@ html, body {
   display: block;
 }
 
-/* Judge line is not drawn as UI chrome - each lane just gets an
-   almost-invisible resting glow that the canvas judge line (a thin light
-   membrane) sits above; tapping blooms it briefly. */
+/* The 4 tap keys: transparent crystal glass tiles, clearly outlined at
+   rest (not just on tap) so they read as touch targets against a bright,
+   busy background video - without becoming an opaque piano-key look. */
 #judge-pads {
   position: absolute; inset: 0;
   display: flex;
   z-index: 3;
   pointer-events: none;
-  padding-bottom: var(--safe-bottom);
+  padding: 0 6px var(--safe-bottom);
 }
 .judge-pad {
   position: relative;
   flex: 1;
-  margin: 0 2px;
+  margin: 0 4px;
   align-self: flex-start;
   /* keep in sync with Renderer.judgeLineRatio in js/renderer.js */
   top: 82%;
-  transform: translateY(-50%);
-  height: 40px;
+  transform: translateY(4px);
+  height: 52px;
+  border-radius: 14px;
+  border: 1px solid rgba(215, 228, 255, 0.4);
+  background: linear-gradient(180deg, rgba(190, 205, 255, 0.13), rgba(150, 125, 255, 0.06));
+  box-shadow: 0 0 14px rgba(140, 170, 255, 0.22), inset 0 0 12px rgba(255, 255, 255, 0.07);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.judge-pad.active {
+  border-color: rgba(240, 246, 255, 0.9);
+  background: linear-gradient(180deg, rgba(215, 226, 255, 0.26), rgba(190, 160, 255, 0.16));
+  box-shadow: 0 0 30px rgba(190, 212, 255, 0.55), inset 0 0 18px rgba(255, 255, 255, 0.2);
 }
 .pad-ripple {
   position: absolute;
   left: 50%; top: 50%;
-  width: 60%; aspect-ratio: 1;
+  width: 65%; aspect-ratio: 1;
   border-radius: 50%;
   transform: translate(-50%, -50%) scale(0.3);
   border: 1px solid rgba(230, 238, 255, 0.75);
@@ -289,7 +317,7 @@ html, body {
 .pad-ripple.show { animation: padRipple 0.5s ease-out; }
 @keyframes padRipple {
   0% { opacity: 0.6; transform: translate(-50%, -50%) scale(0.3); }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.2); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.4); }
 }
 
 #touch-zones {

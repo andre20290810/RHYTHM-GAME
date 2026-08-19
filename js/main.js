@@ -238,11 +238,29 @@ function startBackgroundVideo() {
   }
 }
 
-const VIDEO_DRIFT_THRESHOLD_SEC = 0.2; // correct only beyond this much drift
-const VIDEO_DRIFT_CHECK_MS = 500; // throttled - never resynced every frame
+// Reassigning video.currentTime forces the decoder to seek to the nearest
+// keyframe. On iPhone Safari this is a comparatively expensive, blocking
+// operation - doing it every time drift crossed a small 0.2s threshold
+// (checked every 500ms) meant the background video was being reseeked
+// constantly during normal playback, which is what caused the visible
+// stutter/jank reported on real hardware. audio.mp3 remains the only
+// timing/judgement master regardless of this setting - this only affects
+// how (or whether) the picture-only video is nudged back in sync.
+//
+// Correction is OFF by default: the video simply free-runs from the
+// moment it starts (see startBackgroundVideo), which avoids the jank
+// entirely. A ~4-5 minute track can accumulate aperceptible but usually
+// unobtrusive drift this way; if that turns out to matter more than the
+// stutter did, flip ENABLE_VIDEO_DRIFT_CORRECTION back on - the threshold
+// and interval below are deliberately generous (rare, large corrections
+// only) rather than the previous tight/frequent ones.
+const ENABLE_VIDEO_DRIFT_CORRECTION = false;
+const VIDEO_DRIFT_THRESHOLD_SEC = 1.0; // only correct large, clearly-audible/visible drift
+const VIDEO_DRIFT_CHECK_MS = 4000; // checked rarely, never per-frame
 let lastDriftCheckMs = 0;
 
 function maybeCorrectVideoDrift(currentTime, nowMs) {
+  if (!ENABLE_VIDEO_DRIFT_CORRECTION) return;
   if (!currentManifest.backgroundUrl || bgVideo.style.display === "none") return;
   if (bgVideo.readyState < 2 || bgVideo.paused || bgVideo.seeking) return;
   if (nowMs - lastDriftCheckMs < VIDEO_DRIFT_CHECK_MS) return;
@@ -277,6 +295,7 @@ function triggerPadEffect(lane) {
 function handleLaneDown(lane) {
   if (paused || !game) return;
   laneElements[lane].classList.add("active");
+  judgePads[lane]?.classList.add("active");
   triggerPadEffect(lane);
   const grade = game.laneDown(lane, audioEngine.currentTime);
   if (grade) showJudgePopup(grade);
@@ -286,6 +305,7 @@ function handleLaneDown(lane) {
 function handleLaneUp(lane) {
   if (paused || !game) return;
   laneElements[lane].classList.remove("active");
+  judgePads[lane]?.classList.remove("active");
   game.laneUp(lane, audioEngine.currentTime);
 }
 

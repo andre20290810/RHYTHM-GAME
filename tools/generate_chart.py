@@ -79,6 +79,22 @@ OUTRO_BUFFER_SEC = 1.2
 LANE_COUNT = 4
 HIGH_ENERGY_SECTIONS = {"chorus", "climax"}
 
+# A note only actually needs a finger down during its judgeable window, not
+# forever - mirrors JUDGE_WINDOWS_MS.GOOD from js/constants.js (140ms) as
+# the "still a real hit, not a miss" window. Not importable across the
+# JS/Python boundary, so kept in sync by hand; the game's own judge windows
+# are never touched by this script, this is only how playability is
+# estimated here.
+GOOD_WINDOW_SEC = 0.14
+# Mirrors RELEASE_TOLERANCE_SEC from js/game.js - releasing this close to a
+# hold's tail still counts as a clean finish, so the lane is "in use" a
+# little past its nominal end too.
+RELEASE_TOLERANCE_SEC = 0.10
+# Hard cap on how many lanes may simultaneously require an active finger
+# (a pending tap's judge window, or a hold being held) - see
+# enforce_concurrency_cap(). 2 keeps every chart playable two-thumbs style.
+MAX_CONCURRENT_LANES = 2
+
 
 def nearest_dist(t, times):
     if not times:
@@ -154,6 +170,116 @@ def build_candidate_pool(layer, onsets, used, beat_times, downbeat_times, thresh
     return pool
 
 
+# Priority order for resolving a 3+-lane conflict (see enforce_concurrency_
+# cap): higher number = more important = kept; the loser is dropped.
+#   1. downbeat / strong kick
+#   2. major snare
+#   3. phrase_start
+#   4. other strong musical accent
+#   5. auxiliary / fine onset
+_PRIORITY_CHORD_SYNTHETIC = -1  # a chord's decorative 2nd note - sacrificed first
+_PRIORITY_AUXILIARY = 1
+
+
+def musical_priority(onset, downbeat_times, thresholds, downbeat_window):
+    """Higher = more musically important = wins a 3+-lane conflict."""
+    if onset is None:
+        return _PRIORITY_CHORD_SYNTHETIC
+    if onset["category"] == "kick":
+        return 5 if nearest_dist(onset["time"], downbeat_times) <= downbeat_window else 4.5
+    if onset["category"] == "snare":
+        return 4
+    if onset["phrase_start"]:
+        return 3
+    if onset["strength"] >= thresholds["strong"]:
+        return 2
+    return _PRIORITY_AUXILIARY
+
+
+def note_active_window(note):
+    """[start, end) during which a lane must have a finger down for this
+    note - a tap needs one only around its judge window, a hold needs one
+    for its whole duration (plus a little slack at both ends)."""
+    if note["type"] == "hold":
+        return note["time"] - GOOD_WINDOW_SEC, note["time"] + note["duration"] + RELEASE_TOLERANCE_SEC
+    return note["time"] - GOOD_WINDOW_SEC, note["time"] + GOOD_WINDOW_SEC
+
+
+def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, downbeat_times, thresholds, downbeat_window):
+    """Drops notes so that no instant ever asks the player to hold down
+    more than MAX_CONCURRENT_LANES lanes at once - counting a tap's judge
+    window AND a hold's whole duration as "this lane is occupied".
+
+    notes/note_onset_ids/is_new are already time-sorted and share indices.
+    Locked notes (is_new[i] is False) are NEVER dropped - a higher
+    difficulty layer must not undo what a lower one already committed.
+    When a locked note's own arrival would itself exceed the cap (because
+    new-layer notes are occupying too many lanes around it), THIS layer's
+    own new notes are evicted to make room, weakest musical priority first;
+    a new-vs-new conflict is resolved the same way. A dropped candidate's
+    onset id is intentionally left in `used` (see build_layer) so it is
+    never reconsidered at a higher difficulty either - it already lost this
+    conflict against the very notes that persist into every higher layer.
+    Returns the filtered (notes, note_onset_ids, is_new, dropped_count)."""
+    active = []  # [{lane, end, priority, removable, idx}]
+    removed = set()
+
+    def priority_of(idx):
+        oid = note_onset_ids[idx]
+        onset = onsets[oid] if oid is not None else None
+        return musical_priority(onset, downbeat_times, thresholds, downbeat_window)
+
+    for idx, note in enumerate(notes):
+        start, end = note_active_window(note)
+        lane = note["lane"]
+        active = [a for a in active if a["end"] > start and a["idx"] not in removed]
+        others = {a["lane"]: a for a in active if a["lane"] != lane}
+
+        if len(others) + 1 > MAX_CONCURRENT_LANES:
+            locked = not is_new[idx]
+            removable_others = sorted(
+                (a for a in others.values() if a["removable"]), key=lambda a: a["priority"]
+            )
+            needed = len(others) + 1 - MAX_CONCURRENT_LANES
+            this_priority = priority_of(idx) if not locked else float("inf")
+            freed = 0
+            for weak in removable_others:
+                if freed >= needed:
+                    break
+                if locked or this_priority > weak["priority"]:
+                    removed.add(weak["idx"])
+                    active = [a for a in active if a["idx"] != weak["idx"]]
+                    freed += 1
+            still_over = (len(others) - freed) + 1 > MAX_CONCURRENT_LANES
+            if still_over:
+                if locked:
+                    # Can't drop a locked note and couldn't free enough
+                    # room from removable others (e.g. a locked note is
+                    # itself one of the conflicting lanes) - by construction
+                    # this shouldn't happen since locked notes already
+                    # satisfied the cap among themselves when they were
+                    # built, but skip adding to `active` rather than lose
+                    # the note if it somehow does.
+                    pass
+                else:
+                    removed.add(idx)
+                    continue
+
+        active.append({
+            "lane": lane, "end": end, "priority": priority_of(idx),
+            "removable": is_new[idx], "idx": idx,
+        })
+
+    kept_notes, kept_ids, kept_is_new = [], [], []
+    for idx, note in enumerate(notes):
+        if idx in removed:
+            continue
+        kept_notes.append(note)
+        kept_ids.append(note_onset_ids[idx])
+        kept_is_new.append(is_new[idx])
+    return kept_notes, kept_ids, kept_is_new, len(removed)
+
+
 def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times,
                  downbeat_times, sections, thresholds, seed):
     """Replays prev_notes (locked, never modified) in time order interleaved
@@ -193,6 +319,7 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
     consecutive = 0
     notes = []
     note_onset_ids = []
+    is_new = []
     new_used = set(used)
 
     def pick_lane(base_band, avoid=None):
@@ -221,6 +348,7 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
             global_last_time = note["time"]
             notes.append(note)
             note_onset_ids.append(onset_id)
+            is_new.append(False)
             continue
 
         o = obj
@@ -254,6 +382,7 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
 
         notes.append(note)
         note_onset_ids.append(onset_id)
+        is_new.append(True)
         new_used.add(onset_id)
         if lane == last_lane:
             consecutive += 1
@@ -277,13 +406,24 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
                 lane2 = rng.choice(other_lanes)
                 notes.append({"time": round(t, 3), "lane": lane2, "type": "tap"})
                 note_onset_ids.append(None)  # synthetic chord partner, not a real onset
+                is_new.append(True)
                 lane_free_time[lane2] = t + cfg["min_gap_lane"]
 
-    combined = list(zip(notes, note_onset_ids))
+    combined = list(zip(notes, note_onset_ids, is_new))
     combined.sort(key=lambda p: (p[0]["time"], p[0]["lane"]))
-    notes_sorted = [n for n, _ in combined]
-    ids_sorted = [i for _, i in combined]
-    return notes_sorted, ids_sorted, new_used
+    notes_sorted = [n for n, _, _ in combined]
+    ids_sorted = [i for _, i, _ in combined]
+    is_new_sorted = [w for _, _, w in combined]
+
+    # Final pass: no instant may require more than MAX_CONCURRENT_LANES
+    # simultaneous fingers (tap judge windows + hold durations combined).
+    # Only THIS layer's own new candidates (is_new_sorted[i] is True) can
+    # ever be dropped here - notes carried in from a lower difficulty are
+    # never touched, preserving EASY subset NORMAL subset HARD.
+    notes_sorted, ids_sorted, is_new_sorted, dropped = enforce_concurrency_cap(
+        notes_sorted, ids_sorted, is_new_sorted, onsets, downbeat_times, thresholds, cfg["downbeat_window"],
+    )
+    return notes_sorted, ids_sorted, new_used, dropped
 
 
 def generate_all_difficulties(analysis, base_seed):
@@ -304,13 +444,15 @@ def generate_all_difficulties(analysis, base_seed):
     used = set()
     notes, ids = [], []
     results = {}
+    conflicts = {}
     for layer_i, layer in enumerate(["easy", "normal", "hard"]):
-        notes, ids, used = build_layer(
+        notes, ids, used, dropped = build_layer(
             layer, notes, ids, onsets, used, beat_times, downbeat_times, sections,
             thresholds, seed=base_seed + layer_i,
         )
         results[layer] = list(notes)  # snapshot - "hard" continues building on this list
-    return results, thresholds
+        conflicts[layer] = dropped
+    return results, thresholds, conflicts
 
 
 def summarize(notes):
@@ -329,7 +471,7 @@ if __name__ == "__main__":
     with open(args.analysis, "r", encoding="utf-8") as f:
         analysis = json.load(f)
 
-    results, thresholds = generate_all_difficulties(analysis, base_seed=args.seed)
+    results, thresholds, conflicts = generate_all_difficulties(analysis, base_seed=args.seed)
 
     summary = {"thresholds": thresholds}
     for diff, notes in results.items():
@@ -342,5 +484,6 @@ if __name__ == "__main__":
                 "notes": notes,
             }, f, ensure_ascii=False, indent=2)
         summary[diff] = summarize(notes)
+        summary[diff]["concurrency_conflicts_resolved"] = conflicts[diff]
 
     print(json.dumps(summary, ensure_ascii=False, indent=2), file=sys.stderr)

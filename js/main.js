@@ -290,8 +290,18 @@ function handleLaneDown(lane) {
   laneElements[lane].classList.add("active");
   judgePads[lane]?.classList.add("active");
   triggerPadEffect(lane);
-  const grade = game.laneDown(lane, audioEngine.currentTime);
-  if (grade) showJudgePopup(grade);
+  // Peek at the note about to be judged (laneDown only tells us the grade,
+  // not the note) so the green success-icon swap applies to tap notes only
+  // - hold notes keep their existing crystal-tile body (see renderer.js).
+  const judgedType = game.pendingByLane[lane][0]?.type;
+  const currentTime = audioEngine.currentTime;
+  const grade = game.laneDown(lane, currentTime);
+  if (grade) {
+    showJudgePopup(grade);
+    if (judgedType === "tap" && grade !== "MISS") {
+      renderer.triggerHitEffect(lane, grade, currentTime);
+    }
+  }
   updateHud();
 }
 
@@ -392,6 +402,7 @@ if (new URLSearchParams(location.search).has("debug")) {
   window.__debug = {
     audioEngine,
     bgVideo,
+    renderer,
     getGame: () => game,
     getManifest: () => currentManifest,
   };

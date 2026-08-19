@@ -552,22 +552,12 @@
       "type": "tap"
     },
     {
-      "time": 41.842,
-      "lane": 0,
-      "type": "tap"
-    },
-    {
       "time": 42.051,
       "lane": 1,
       "type": "tap"
     },
     {
       "time": 42.342,
-      "lane": 0,
-      "type": "tap"
-    },
-    {
-      "time": 42.713,
       "lane": 0,
       "type": "tap"
     },
@@ -725,11 +715,6 @@
     {
       "time": 54.033,
       "lane": 3,
-      "type": "tap"
-    },
-    {
-      "time": 54.253,
-      "lane": 0,
       "type": "tap"
     },
     {
@@ -1111,18 +1096,8 @@
       "type": "tap"
     },
     {
-      "time": 85.357,
-      "lane": 1,
-      "type": "tap"
-    },
-    {
       "time": 85.705,
       "lane": 1,
-      "type": "tap"
-    },
-    {
-      "time": 85.914,
-      "lane": 0,
       "type": "tap"
     },
     {
@@ -1552,12 +1527,6 @@
       "type": "tap"
     },
     {
-      "time": 117.063,
-      "lane": 3,
-      "type": "hold",
-      "duration": 2.55
-    },
-    {
       "time": 117.516,
       "lane": 2,
       "type": "tap"
@@ -1687,11 +1656,6 @@
     {
       "time": 129.614,
       "lane": 3,
-      "type": "tap"
-    },
-    {
-      "time": 129.823,
-      "lane": 0,
       "type": "tap"
     },
     {
@@ -1912,11 +1876,6 @@
       "duration": 2.5
     },
     {
-      "time": 146.808,
-      "lane": 1,
-      "type": "tap"
-    },
-    {
       "time": 147.795,
       "lane": 3,
       "type": "tap"
@@ -1924,11 +1883,6 @@
     {
       "time": 148.573,
       "lane": 3,
-      "type": "tap"
-    },
-    {
-      "time": 148.782,
-      "lane": 2,
       "type": "tap"
     },
     {
@@ -2209,11 +2163,6 @@
       "type": "tap"
     },
     {
-      "time": 169.343,
-      "lane": 3,
-      "type": "tap"
-    },
-    {
       "time": 169.552,
       "lane": 1,
       "type": "tap"
@@ -2262,12 +2211,6 @@
       "time": 173.987,
       "lane": 2,
       "type": "tap"
-    },
-    {
-      "time": 174.161,
-      "lane": 0,
-      "type": "hold",
-      "duration": 2.5
     },
     {
       "time": 174.66,
@@ -2586,18 +2529,8 @@
       "type": "tap"
     },
     {
-      "time": 202.745,
-      "lane": 0,
-      "type": "tap"
-    },
-    {
       "time": 203.326,
       "lane": 0,
-      "type": "tap"
-    },
-    {
-      "time": 203.5,
-      "lane": 2,
       "type": "tap"
     },
     {
@@ -2868,12 +2801,6 @@
       "type": "tap"
     },
     {
-      "time": 226.894,
-      "lane": 3,
-      "type": "hold",
-      "duration": 2.5
-    },
-    {
       "time": 227.091,
       "lane": 2,
       "type": "tap"
@@ -2962,11 +2889,6 @@
     {
       "time": 234.417,
       "lane": 2,
-      "type": "tap"
-    },
-    {
-      "time": 234.603,
-      "lane": 3,
       "type": "tap"
     },
     {

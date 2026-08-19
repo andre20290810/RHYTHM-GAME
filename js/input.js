@@ -32,6 +32,18 @@ export class InputController {
       el.addEventListener("pointerup", release);
       el.addEventListener("pointercancel", release);
       el.addEventListener("pointerleave", release);
+
+      // Belt-and-suspenders for iOS Safari: its long-press-to-select and
+      // callout-menu gesture recognizers can preempt a held finger before
+      // (or independently of) pointer events. touch-action/user-select in
+      // CSS covers most of this, but touchstart/touchmove must also be
+      // preventDefault()-ed here - which requires an explicit non-passive
+      // listener, since the browser default for touch listeners is passive
+      // (preventDefault() is silently ignored otherwise). contextmenu is
+      // blocked the same way as a final fallback against the callout menu.
+      el.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+      el.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+      el.addEventListener("contextmenu", (e) => e.preventDefault());
     });
   }
 

@@ -11,17 +11,16 @@
 
   <section id="screen-title" class="screen active">
     <div id="title-bg" aria-hidden="true"></div>
-    <div class="title-content">
+    <button id="btn-start" class="title-tap-target">
       <h1 class="title-logo">Memories Of Alexia</h1>
-      <button id="btn-start" class="btn-veil">PLAY</button>
-    </div>
+      <span class="tap-to-start">TAP TO START</span>
+    </button>
   </section>
 
   <section id="screen-select" class="screen">
     <div id="select-bg" aria-hidden="true"></div>
     <div class="veil-panel select-panel">
       <h2 id="select-song-title">Loading...</h2>
-      <p id="select-song-sub"></p>
       <div class="difficulty-buttons">
         <button class="btn-diff" data-diff="EASY">EASY</button>
         <button class="btn-diff" data-diff="NORMAL">NORMAL</button>
@@ -48,10 +47,10 @@
     <canvas id="notes-canvas"></canvas>
 
     <div id="judge-pads">
-      <div class="judge-pad" data-lane="0"><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="1"><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="2"><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="3"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="0"><span class="pad-core"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="1"><span class="pad-core"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="2"><span class="pad-core"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="3"><span class="pad-core"></span><span class="pad-ripple"></span></div>
     </div>
 
     <div id="touch-zones">
@@ -62,17 +61,16 @@
     </div>
 
     <div id="hud">
-      <div id="hud-top">
-        <div id="hud-score-wrap">
-          <span class="hud-label">SCORE</span>
-          <div id="hud-score">0</div>
-        </div>
+      <div id="hud-left">
+        <span class="hud-label">SCORE</span>
+        <div id="hud-score">0</div>
         <div id="hud-combo-wrap">
+          <span class="hud-label">COMBO</span>
           <div id="hud-combo"></div>
         </div>
-        <button id="btn-pause" class="btn-icon">II</button>
+        <div id="hud-judge"></div>
       </div>
-      <div id="hud-judge"></div>
+      <button id="btn-pause" class="btn-icon">II</button>
       <div id="hud-progress"><div id="hud-progress-bar"></div></div>
     </div>
 

@@ -61,8 +61,6 @@ async function init() {
     const catalog = await loadCatalog();
     currentManifest = await loadManifest(catalog[0]);
     document.getElementById("select-song-title").textContent = currentManifest.title;
-    document.getElementById("select-song-sub").textContent =
-      `BPM ${Math.round(currentManifest.bpm)} / ${formatTime(currentManifest.durationSec)}`;
     // Start buffering immediately (no gesture required just to load bytes -
     // only the later .play() call needs to be inside a tap handler).
     audioEngine.setSource(currentManifest.audioUrl);
@@ -83,12 +81,6 @@ async function init() {
     onLaneDown: (lane) => handleLaneDown(lane),
     onLaneUp: (lane) => handleLaneUp(lane),
   });
-}
-
-function formatTime(sec) {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 document.getElementById("btn-start").addEventListener("click", () => {

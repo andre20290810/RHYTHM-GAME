@@ -44,6 +44,8 @@ export class Renderer {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.width, this.height);
 
+    this._drawLaneDividers(comboTier);
+
     for (const note of game.notes) {
       if (note.state === "hit" || note.state === "missed" || note.state === "completed" || note.state === "broken") {
         continue;
@@ -63,11 +65,37 @@ export class Renderer {
       }
 
       const y = this.yForTime(note.time, currentTime);
-      if (y < -36 || y > this.height + 36) continue;
-      this._drawTile(x, y - 18, 36, palette, 1, true);
+      if (y < -44 || y > this.height + 44) continue;
+      this._drawTile(x, y - 22, 44, palette, 1, true);
     }
 
     this._drawJudgeLine(comboTier);
+  }
+
+  // 4 straight play lanes read as flat; a slight top-narrower / bottom-
+  // wider taper on the (thin, quiet) boundary lines gives a sense of depth
+  // - "lanes floating in the scene" - without any real 3D transform work.
+  // Only the 3 internal boundaries are drawn; the screen edges already
+  // frame the outer lanes.
+  _drawLaneDividers(comboTier) {
+    const ctx = this.ctx;
+    const perspective = 0.10; // fraction pulled toward center at the very top
+    const centerX = this.width / 2;
+    const alpha = 0.14 + comboTier * 0.05;
+    ctx.save();
+    ctx.strokeStyle = `rgba(215,226,255,${alpha})`;
+    ctx.shadowColor = "rgba(160,190,255,0.4)";
+    ctx.shadowBlur = 3 + comboTier * 1.5;
+    ctx.lineWidth = 1;
+    for (let i = 1; i < LANE_COUNT; i++) {
+      const bx = i * this.laneWidth;
+      const tx = centerX + (bx - centerX) * (1 - perspective);
+      ctx.beginPath();
+      ctx.moveTo(tx, 0);
+      ctx.lineTo(bx, this.height);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _proximityBoost(centerY) {
@@ -104,12 +132,18 @@ export class Renderer {
     roundRect(ctx, px, y, w, h, 10);
     ctx.stroke();
 
+    // thin bright highlight near the bottom edge of the tile
+    ctx.globalAlpha = 0.35 + boost * 0.35;
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    roundRect(ctx, px + w * 0.1, y + h - 5, w * 0.8, 1.6, 1);
+    ctx.fill();
+
     // small crystal spark in the center
     if (withSpark) {
       const cx = px + w / 2;
       const cy = y + h / 2;
-      const r = 3 + boost * 2.5;
-      ctx.globalAlpha = 0.55 + boost * 0.4;
+      const r = 4 + boost * 3;
+      ctx.globalAlpha = 0.6 + boost * 0.4;
       ctx.fillStyle = palette.spark;
       ctx.beginPath();
       ctx.moveTo(cx, cy - r);

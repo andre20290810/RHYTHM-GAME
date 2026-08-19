@@ -32,19 +32,23 @@ const HIT_EFFECT_BY_GRADE = {
   GOOD: { flareSec: 0.18, ringSec: 0.16, ring2Sec: 0, sparkleSec: 0.24, sparkleCount: 4, emberCount: 0, glow: 0.45, flashSec: 0 },
 };
 
-// Builds the shared crystal-shard path (a horizontal faceted hexagon)
-// centered at (cx, cy) with the given bounding width/height. Callers fill
-// and/or stroke it themselves so the same silhouette can carry different
-// glow intensities (falling vs. HOLD head vs. brighter-while-held).
-function crystalPath(ctx, cx, cy, w, h) {
-  const hw = w / 2, hh = h / 2;
+// Builds the path for ONE slender crystal blade - side -1 is the left
+// blade, +1 is the right. Each blade is its own thin, tapered shard
+// (pointed at both ends, bulging slightly in the middle) leaning inward
+// from an outer-top corner down toward a point near the bottom-center.
+// Two of these, mirrored, are what form the note's V silhouette - never
+// drawn as a single bare "V" glyph/triangle/arrow. Centered at (cx, cy)
+// within the given bounding width/height; callers fill/stroke it.
+function shardBladePath(ctx, cx, cy, w, h, side) {
+  const topX = cx + side * w * 0.46, topY = cy - h * 0.58;
+  const outX = cx + side * w * 0.30, outY = cy - h * 0.02;
+  const tipX = cx + side * w * 0.05, tipY = cy + h * 0.6;
+  const inX = cx + side * w * 0.11, inY = cy + h * 0.12;
   ctx.beginPath();
-  ctx.moveTo(cx - hw, cy);
-  ctx.lineTo(cx - hw * 0.42, cy - hh);
-  ctx.lineTo(cx + hw * 0.42, cy - hh);
-  ctx.lineTo(cx + hw, cy);
-  ctx.lineTo(cx + hw * 0.42, cy + hh);
-  ctx.lineTo(cx - hw * 0.42, cy + hh);
+  ctx.moveTo(topX, topY);
+  ctx.lineTo(outX, outY);
+  ctx.lineTo(tipX, tipY);
+  ctx.lineTo(inX, inY);
   ctx.closePath();
 }
 
@@ -156,7 +160,7 @@ export class Renderer {
   }
 
   // HOLD notes get their own visual language, not the tap crystal alone and
-  // not a plain bar: the same drawn crystal-shard HEAD (see crystalPath)
+  // not a plain bar: the same drawn crystal-shard HEAD (see shardBladePath)
   // as a tap note, plus a small collar ring where an upward energy ribbon
   // attaches and runs to a small crystal TAIL marker - so the note reads
   // as "press and hold this far" as soon as any part of it is on screen,
@@ -359,62 +363,74 @@ export class Renderer {
     ctx.restore();
   }
 
-  // Renders just the crystal-shard body (glass fill + bright rim + a
-  // facet shine + a small pulsing core) at a given center/size - shared by
-  // every note element so a tap note, a HOLD head, and a brighter-while-
-  // held HOLD head all read as the same material, not three unrelated
-  // shapes. glowMul scales the rim glow/line-width (HOLD-while-holding
-  // uses a stronger value); alphaBoost is the 0..1 judge-line-proximity
-  // term from _proximityBoost().
+  // Renders the crystal-shard body: two slender blades (see
+  // shardBladePath) leaning inward to a small glowing core where they
+  // converge, forming a V silhouette - each blade gets its own glass fill
+  // + bright rim + facet shine, so it reads as "two shards", not a single
+  // flat glyph. Shared by every note element so a tap note, a HOLD head,
+  // and a brighter-while-held HOLD head all read as the same material.
+  // glowMul scales the rim glow/line-width (HOLD-while-holding uses a
+  // stronger value); alphaBoost is the 0..1 judge-line-proximity term
+  // from _proximityBoost().
   _drawShardCore(cx, cy, w, h, glowMul, alphaBoost) {
     const ctx = this.ctx;
-    crystalPath(ctx, cx, cy, w, h);
 
-    const fillGrad = ctx.createLinearGradient(cx, cy - h / 2, cx, cy + h / 2);
-    fillGrad.addColorStop(0, `rgba(210,222,255,${0.16 + alphaBoost * 0.14})`);
-    fillGrad.addColorStop(0.5, `rgba(255,255,255,${0.22 + alphaBoost * 0.2})`);
-    fillGrad.addColorStop(1, `rgba(180,165,255,${0.16 + alphaBoost * 0.14})`);
-    ctx.fillStyle = fillGrad;
-    ctx.fill();
+    for (const side of [-1, 1]) {
+      shardBladePath(ctx, cx, cy, w, h, side);
 
-    ctx.shadowBlur = (5 + alphaBoost * 9) * glowMul;
-    const rimGrad = ctx.createLinearGradient(cx - w / 2, cy, cx + w / 2, cy);
-    rimGrad.addColorStop(0, "rgba(170,200,255,0.85)");
-    rimGrad.addColorStop(0.5, "rgba(245,248,255,0.98)");
-    rimGrad.addColorStop(1, "rgba(200,175,255,0.85)");
-    ctx.strokeStyle = rimGrad;
-    ctx.lineWidth = (1.4 + alphaBoost * 0.8) * Math.min(1.4, glowMul);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
+      const fillGrad = ctx.createLinearGradient(cx + side * w * 0.4, cy - h * 0.5, cx, cy + h * 0.5);
+      fillGrad.addColorStop(0, `rgba(210,222,255,${0.16 + alphaBoost * 0.14})`);
+      fillGrad.addColorStop(0.6, `rgba(255,255,255,${0.22 + alphaBoost * 0.2})`);
+      fillGrad.addColorStop(1, `rgba(180,165,255,${0.20 + alphaBoost * 0.16})`);
+      ctx.fillStyle = fillGrad;
+      ctx.fill();
 
-    // a short bright facet highlight near the upper edge - a glass "shine"
-    ctx.globalAlpha = 0.4 + alphaBoost * 0.3;
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(cx - w * 0.28, cy - h * 0.42);
-    ctx.lineTo(cx - w * 0.05, cy - h * 0.5);
-    ctx.stroke();
+      ctx.shadowBlur = (5 + alphaBoost * 9) * glowMul;
+      const rimGrad = ctx.createLinearGradient(cx + side * w * 0.46, cy - h * 0.58, cx, cy + h * 0.6);
+      rimGrad.addColorStop(0, "rgba(170,200,255,0.85)");
+      rimGrad.addColorStop(0.6, "rgba(245,248,255,0.98)");
+      rimGrad.addColorStop(1, "rgba(200,175,255,0.9)");
+      ctx.strokeStyle = rimGrad;
+      ctx.lineWidth = (1.3 + alphaBoost * 0.7) * Math.min(1.4, glowMul);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
 
-    // pulsating light core at the center
-    const coreR = (3 + alphaBoost * 2.5) * Math.min(1.3, glowMul);
-    ctx.globalAlpha = 0.55 + alphaBoost * 0.3;
+      // a short bright facet highlight along the blade's outer edge
+      ctx.globalAlpha = 0.4 + alphaBoost * 0.3;
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx + side * w * 0.4, cy - h * 0.45);
+      ctx.lineTo(cx + side * w * 0.24, cy - h * 0.1);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // small glowing core where the two blades converge, at the bottom
+    // point of the V - not centered in the bounding box, right at the tip
+    const coreY = cy + h * 0.58;
+    const coreR = (2.6 + alphaBoost * 2.2) * Math.min(1.3, glowMul);
+    ctx.save();
+    ctx.shadowColor = "rgba(255,255,255,0.9)";
+    ctx.shadowBlur = 4 + alphaBoost * 6;
+    ctx.globalAlpha = 0.6 + alphaBoost * 0.3;
     ctx.fillStyle = "rgba(255,255,255,0.95)";
     ctx.beginPath();
-    ctx.moveTo(cx, cy - coreR);
-    ctx.lineTo(cx + coreR * 0.6, cy);
-    ctx.lineTo(cx, cy + coreR);
-    ctx.lineTo(cx - coreR * 0.6, cy);
+    ctx.moveTo(cx, coreY - coreR);
+    ctx.lineTo(cx + coreR * 0.6, coreY);
+    ctx.lineTo(cx, coreY + coreR);
+    ctx.lineTo(cx - coreR * 0.6, coreY);
     ctx.closePath();
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
-  // Falling tap-note visual: a drawn crystal shard (see crystalPath /
-  // _drawShardCore) - blue/blue-violet/silver, translucent, faceted, wide
-  // rather than tall - plus a quiet Canvas-only glow/echo/particle
-  // treatment that gets a little stronger as the note nears the judge
-  // line. Nothing here is an image; every pixel is path/gradient/stroke.
+  // Falling tap-note visual: a drawn crystal shard (see shardBladePath /
+  // _drawShardCore) - two slender blades converging into a V, in
+  // blue/blue-violet/silver, translucent, faceted - plus a quiet
+  // Canvas-only glow/echo/particle treatment that gets a little stronger
+  // as the note nears the judge line. Nothing here is an image; every
+  // pixel is path/gradient/stroke.
   _drawCrystalNote(x, y, note, currentTime) {
     const ctx = this.ctx;
     const cx = x + this.laneWidth / 2;
@@ -445,8 +461,10 @@ export class Renderer {
       const echoY = cy - h * (1.0 + i * 0.85);
       ctx.globalAlpha = (0.11 - i * 0.03) * (0.6 + boost * 0.4);
       ctx.fillStyle = i % 2 === 0 ? "rgba(190,210,255,1)" : "rgba(205,190,255,1)";
-      crystalPath(ctx, cx, echoY, w * echoScale, h * echoScale);
-      ctx.fill();
+      for (const side of [-1, 1]) {
+        shardBladePath(ctx, cx, echoY, w * echoScale, h * echoScale, side);
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
 

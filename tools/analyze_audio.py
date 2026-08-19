@@ -42,6 +42,74 @@ def to_native(obj):
     return obj
 
 
+def estimate_downbeat_phase(beat_times, onset_env_perc, sr, hop_length):
+    # librosa's beat tracker gives an accurate tempo/beat grid but does NOT
+    # know which beat is "1" - grouping every 4th beat starting from
+    # beat_times[0] (the old approach) silently assumes the very first
+    # detected beat is a downbeat, which is often wrong and rewards the
+    # wrong beat position when generate_chart.py scores onsets by downbeat
+    # proximity. Downbeats/backbeats usually carry more percussive
+    # (kick/snare) energy than off-beats, so we try all 4 phase offsets and
+    # keep whichever aligns with the most percussive-onset energy.
+    if len(beat_times) < 4:
+        return 0
+    n_frames = len(onset_env_perc)
+    beat_frames = np.clip(np.round(beat_times * sr / hop_length).astype(int), 0, n_frames - 1)
+    beat_strength = onset_env_perc[beat_frames]
+    best_phase, best_score = 0, -1.0
+    for phase in range(4):
+        score = float(beat_strength[phase::4].sum())
+        if score > best_score:
+            best_score = score
+            best_phase = phase
+    return best_phase
+
+
+def classify_percussive_onsets(y_perc, sr, onset_times, win_sec=0.08):
+    # Kick vs snare vs "other percussive" from short-window spectral shape
+    # right after each onset - kicks concentrate energy very low with a
+    # low, stable spectral centroid; snares are broadband/noisy (high
+    # spectral flatness, more zero-crossings) with a higher centroid.
+    # Thresholds are percentile-based (relative to this song's own
+    # percussive onsets), not fixed magic numbers, so it adapts per track.
+    win = max(256, int(win_sec * sr))
+    centroids, flatness, low_ratio = [], [], []
+    for t in onset_times:
+        start = int(t * sr)
+        seg = y_perc[start:start + win]
+        if len(seg) < 256:
+            seg = np.pad(seg, (0, 256 - len(seg)))
+        c = float(librosa.feature.spectral_centroid(y=seg, sr=sr)[0].mean())
+        f = float(librosa.feature.spectral_flatness(y=seg)[0].mean())
+        S = np.abs(np.fft.rfft(seg))
+        freqs = np.fft.rfftfreq(len(seg), 1 / sr)
+        total_e = float((S ** 2).sum()) or 1.0
+        low_e = float((S[freqs < 150] ** 2).sum())
+        centroids.append(c)
+        flatness.append(f)
+        low_ratio.append(low_e / total_e)
+
+    centroids = np.array(centroids)
+    flatness = np.array(flatness)
+    low_ratio = np.array(low_ratio)
+    if len(centroids) == 0:
+        return []
+
+    centroid_p40 = np.percentile(centroids, 40)
+    low_ratio_p60 = np.percentile(low_ratio, 60)
+    flatness_p60 = np.percentile(flatness, 60)
+
+    categories = []
+    for c, f, lr in zip(centroids, flatness, low_ratio):
+        if c <= centroid_p40 and lr >= low_ratio_p60:
+            categories.append("kick")
+        elif f >= flatness_p60 and c > centroid_p40:
+            categories.append("snare")
+        else:
+            categories.append("perc_other")
+    return categories
+
+
 def band_index(freq_hz):
     # 4 coarse bands mapped later to lanes 0..3 (low -> high)
     if freq_hz < 150:
@@ -106,11 +174,13 @@ def analyze(path, sr_target=44100, hop_length=512):
     if len(beat_times) == 0 or beat_times[0] > 0.05:
         beat_times = np.concatenate([[0.0], beat_times])
 
-    # bar/downbeat estimate: group every 4 beats starting at the first beat
-    downbeat_times = beat_times[::4]
-
     onset_env_perc = librosa.onset.onset_strength(y=y_perc, sr=sr, hop_length=hop_length)
     onset_env_harm = librosa.onset.onset_strength(y=y_harm, sr=sr, hop_length=hop_length)
+
+    # bar/downbeat estimate: group every 4 beats, phase-corrected (see
+    # estimate_downbeat_phase) instead of assuming beat_times[0] is beat 1.
+    downbeat_phase = estimate_downbeat_phase(beat_times, onset_env_perc, sr, hop_length)
+    downbeat_times = beat_times[downbeat_phase::4]
 
     onset_frames_perc = librosa.onset.onset_detect(
         onset_envelope=onset_env_perc, sr=sr, hop_length=hop_length, backtrack=True, units="frames"
@@ -172,6 +242,36 @@ def analyze(path, sr_target=44100, hop_length=512):
             o["sustain"] = sustain_duration(o["time"])
         else:
             o["sustain"] = 0.0
+
+    # --- musical category per onset (see classify_percussive_onsets) ---
+    # A merged "perc+harm" event is driven primarily by the percussive hit
+    # (typically the more rhythmically foundational component), so the
+    # percussive classification takes precedence when both are present.
+    perc_idx = [i for i, o in enumerate(onsets) if "perc" in o["source"]]
+    if perc_idx:
+        perc_categories = classify_percussive_onsets(y_perc, sr, [onsets[i]["time"] for i in perc_idx])
+        for i, cat in zip(perc_idx, perc_categories):
+            onsets[i]["category"] = cat
+    for o in onsets:
+        if "category" not in o:
+            o["category"] = "harm_other"
+
+    # phrase-start: a harmonic (vocal/melody) onset following a genuine gap
+    # in harmonic energy, i.e. a new phrase entering after a rest/breath -
+    # not just a wobble mid-note. Independent of the perc/harm category
+    # above, since a merged onset can be both e.g. a kick AND a phrase start.
+    harm_gap_floor = float(np.percentile(rms_harm_norm, 25))
+    gap_needed_sec = 0.35
+
+    def is_phrase_start(t):
+        end_frame = int(round(t * sr / hop_length))
+        start_frame = max(0, end_frame - int(round(gap_needed_sec * sr / hop_length)))
+        if start_frame >= end_frame:
+            return False
+        return bool(rms_harm_norm[start_frame:end_frame].mean() < harm_gap_floor)
+
+    for o in onsets:
+        o["phrase_start"] = "harm" in o["source"] and is_phrase_start(o["time"])
 
     # --- section detection: bar-level RMS energy + onset density ---
     rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]

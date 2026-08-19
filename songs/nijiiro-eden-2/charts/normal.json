@@ -1121,12 +1121,6 @@
       "type": "tap"
     },
     {
-      "time": 89.118,
-      "lane": 3,
-      "type": "hold",
-      "duration": 0.828
-    },
-    {
       "time": 89.536,
       "lane": 2,
       "type": "tap"

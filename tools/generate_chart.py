@@ -90,10 +90,15 @@ GOOD_WINDOW_SEC = 0.14
 # hold's tail still counts as a clean finish, so the lane is "in use" a
 # little past its nominal end too.
 RELEASE_TOLERANCE_SEC = 0.10
-# Hard cap on how many lanes may simultaneously require an active finger
-# (a pending tap's judge window, or a hold being held) - see
-# enforce_concurrency_cap(). 2 keeps every chart playable two-thumbs style.
-MAX_CONCURRENT_LANES = 2
+# Which (concurrent-holds, concurrent-taps) combinations a player may ever
+# be asked for at once - see enforce_concurrency_cap(). A HOLD already ties
+# up a hand for its whole duration, so at most one extra tap is fair while
+# one HOLD is active, and none at all while two HOLDs are active; pure taps
+# alone may stack up to 3 (a full chord), but 4 lanes at once never happens
+# since nothing in this set sums past 3.
+#   allowed:  tap / tap+tap / tap+tap+tap / HOLD / HOLD+tap / HOLD+HOLD
+#   forbidden: HOLD+tap+tap, HOLD+HOLD+tap, HOLD+HOLD+HOLD, any 4-lane combo
+ALLOWED_HOLD_TAP_COMBOS = {(0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (2, 0)}
 
 
 def nearest_dist(t, times):
@@ -206,22 +211,26 @@ def note_active_window(note):
 
 
 def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, downbeat_times, thresholds, downbeat_window):
-    """Drops notes so that no instant ever asks the player to hold down
-    more than MAX_CONCURRENT_LANES lanes at once - counting a tap's judge
-    window AND a hold's whole duration as "this lane is occupied".
+    """Drops notes so that no instant ever asks the player for a
+    (concurrent-holds, concurrent-taps) combination outside
+    ALLOWED_HOLD_TAP_COMBOS - counting a tap's judge window AND a hold's
+    whole duration (start through RELEASE_TOLERANCE_SEC past its tail) as
+    "this lane is occupied".
 
     notes/note_onset_ids/is_new are already time-sorted and share indices.
     Locked notes (is_new[i] is False) are NEVER dropped - a higher
     difficulty layer must not undo what a lower one already committed.
-    When a locked note's own arrival would itself exceed the cap (because
-    new-layer notes are occupying too many lanes around it), THIS layer's
-    own new notes are evicted to make room, weakest musical priority first;
-    a new-vs-new conflict is resolved the same way. A dropped candidate's
-    onset id is intentionally left in `used` (see build_layer) so it is
-    never reconsidered at a higher difficulty either - it already lost this
-    conflict against the very notes that persist into every higher layer.
+    When a locked note's own arrival would itself violate the allowed
+    combo (because new-layer notes are occupying lanes around it), THIS
+    layer's own new notes are evicted one at a time, weakest musical
+    priority first, until the combo is valid again; a new-vs-new conflict
+    is only resolved the same way when the new candidate outranks the
+    weakest active. A dropped candidate's onset id is intentionally left
+    in `used` (see build_layer) so it is never reconsidered at a higher
+    difficulty either - it already lost this conflict against the very
+    notes that persist into every higher layer.
     Returns the filtered (notes, note_onset_ids, is_new, dropped_count)."""
-    active = []  # [{lane, end, priority, removable, idx}]
+    active = []  # [{lane, end, priority, removable, idx, type}]
     removed = set()
 
     def priority_of(idx):
@@ -229,45 +238,47 @@ def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, downbeat_time
         onset = onsets[oid] if oid is not None else None
         return musical_priority(onset, downbeat_times, thresholds, downbeat_window)
 
+    def combo_of(entries, cand_type):
+        holds = sum(1 for a in entries if a["type"] == "hold") + (1 if cand_type == "hold" else 0)
+        taps = sum(1 for a in entries if a["type"] == "tap") + (1 if cand_type == "tap" else 0)
+        return holds, taps
+
     for idx, note in enumerate(notes):
         start, end = note_active_window(note)
         lane = note["lane"]
         active = [a for a in active if a["end"] > start and a["idx"] not in removed]
-        others = {a["lane"]: a for a in active if a["lane"] != lane}
+        others = [a for a in active if a["lane"] != lane]
 
-        if len(others) + 1 > MAX_CONCURRENT_LANES:
-            locked = not is_new[idx]
-            removable_others = sorted(
-                (a for a in others.values() if a["removable"]), key=lambda a: a["priority"]
-            )
-            needed = len(others) + 1 - MAX_CONCURRENT_LANES
-            this_priority = priority_of(idx) if not locked else float("inf")
-            freed = 0
-            for weak in removable_others:
-                if freed >= needed:
-                    break
-                if locked or this_priority > weak["priority"]:
-                    removed.add(weak["idx"])
-                    active = [a for a in active if a["idx"] != weak["idx"]]
-                    freed += 1
-            still_over = (len(others) - freed) + 1 > MAX_CONCURRENT_LANES
-            if still_over:
-                if locked:
-                    # Can't drop a locked note and couldn't free enough
-                    # room from removable others (e.g. a locked note is
-                    # itself one of the conflicting lanes) - by construction
-                    # this shouldn't happen since locked notes already
-                    # satisfied the cap among themselves when they were
-                    # built, but skip adding to `active` rather than lose
-                    # the note if it somehow does.
-                    pass
-                else:
-                    removed.add(idx)
-                    continue
+        locked = not is_new[idx]
+        this_priority = priority_of(idx) if not locked else float("inf")
+        cur_others = others
+        while combo_of(cur_others, note["type"]) not in ALLOWED_HOLD_TAP_COMBOS:
+            removable = sorted((a for a in cur_others if a["removable"]), key=lambda a: a["priority"])
+            if not removable:
+                break
+            weakest = removable[0]
+            if not locked and this_priority <= weakest["priority"]:
+                break
+            removed.add(weakest["idx"])
+            active = [a for a in active if a["idx"] != weakest["idx"]]
+            cur_others = [a for a in cur_others if a["idx"] != weakest["idx"]]
+
+        if combo_of(cur_others, note["type"]) not in ALLOWED_HOLD_TAP_COMBOS:
+            if locked:
+                # Can't drop a locked note and couldn't free enough room
+                # (e.g. two locked notes are themselves the conflict) - by
+                # construction this shouldn't happen since locked notes
+                # already satisfied the rule among themselves when they
+                # were built, but skip adding to `active` rather than lose
+                # the note if it somehow does.
+                pass
+            else:
+                removed.add(idx)
+                continue
 
         active.append({
             "lane": lane, "end": end, "priority": priority_of(idx),
-            "removable": is_new[idx], "idx": idx,
+            "removable": is_new[idx], "idx": idx, "type": note["type"],
         })
 
     kept_notes, kept_ids, kept_is_new = [], [], []
@@ -415,8 +426,8 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
     ids_sorted = [i for _, i, _ in combined]
     is_new_sorted = [w for _, _, w in combined]
 
-    # Final pass: no instant may require more than MAX_CONCURRENT_LANES
-    # simultaneous fingers (tap judge windows + hold durations combined).
+    # Final pass: no instant may require a (holds, taps) combination outside
+    # ALLOWED_HOLD_TAP_COMBOS (tap judge windows + hold durations combined).
     # Only THIS layer's own new candidates (is_new_sorted[i] is True) can
     # ever be dropped here - notes carried in from a lower difficulty are
     # never touched, preserving EASY subset NORMAL subset HARD.

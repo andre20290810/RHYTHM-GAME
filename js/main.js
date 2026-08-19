@@ -137,6 +137,33 @@ document.getElementById("btn-start").addEventListener("click", () => {
 
 document.getElementById("btn-back-title").addEventListener("click", () => showScreen("title"));
 
+// Only one song exists today, so these don't switch anything yet - they're
+// wired so a future song list can plug real logic into
+// selectPreviousSong()/selectNextSong() without touching the button
+// markup, styling, or feedback animation again.
+function songNavTapFeedback(btn) {
+  btn.classList.remove("tapped");
+  void btn.offsetWidth; // restart the CSS transition
+  btn.classList.add("tapped");
+  setTimeout(() => btn.classList.remove("tapped"), 220);
+}
+function selectPreviousSong() {
+  // No-op for now - only one song is available. A future catalog with
+  // multiple songs would update currentManifest/select-bg/song-nav state
+  // here and re-render the select screen.
+}
+function selectNextSong() {
+  // No-op for now - see selectPreviousSong().
+}
+document.getElementById("btn-song-prev").addEventListener("click", (e) => {
+  songNavTapFeedback(e.currentTarget);
+  selectPreviousSong();
+});
+document.getElementById("btn-song-next").addEventListener("click", (e) => {
+  songNavTapFeedback(e.currentTarget);
+  selectNextSong();
+});
+
 document.querySelectorAll(".btn-diff").forEach((btn) => {
   btn.addEventListener("click", () => {
     currentDifficulty = btn.dataset.diff;
@@ -244,12 +271,78 @@ async function onPlaybackStarted() {
   window.addEventListener("resize", () => renderer.resize());
 
   lastDriftCheckMs = 0;
-  // See PRE_ROLL_SEC / loop(): real audio playback (and the video) only
-  // actually starts once this silent, visual-only lead-in finishes, so
-  // even the chart's very first note gets a real look before judgment.
-  preRollRemainingSec = PRE_ROLL_SEC;
-  preRollLastFrameMs = null;
-  loop();
+  // See beginPlayTransition(): the silent visual pre-roll (and, at its
+  // end, real audio/game playback) does NOT start here anymore - it only
+  // starts once the background is confirmed either actually showable or
+  // genuinely broken, never on a bare "still loading" guess.
+  beginPlayTransition();
+}
+
+// How long the lane/HUD/note layer waits after the background reveals
+// before it starts fading in - keeps "background first, gameplay UI
+// after" instead of both popping in together.
+const UI_REVEAL_DELAY_MS = 500;
+// Emergency-only last resort: if the browser never fires ANY ready or
+// error signal for the video at all (a genuinely stuck load - e.g. a
+// dropped connection with nothing surfaced), the screen must not stay
+// black forever with no way forward. This is deliberately far longer than
+// any normal load and is NOT a "the video is just a bit slow" timeout -
+// ordinary slow loading is handled by simply continuing to wait for a
+// real ready/error signal, with no cap.
+const EMERGENCY_FALLBACK_MS = 10000;
+
+// Choreographs "black -> background video -> game UI -> real playback"
+// instead of the old instant cut where lanes/HUD/notes (and even real
+// audio.currentTime advancement) could start before the background video
+// had confirmed it can actually show a frame. Purely visual/sequencing:
+// it never touches note.time or judge windows, and PRE_ROLL_SEC's own
+// duration is unchanged - this only decides when that countdown is
+// allowed to *begin*. A video that is merely slow to load is waited out
+// indefinitely (readyState/loadeddata/canplay); only a genuine failure
+// (a play() rejection or the element's own error event) switches over to
+// the CSS fallback and continues - "still loading" is never treated as
+// "broken".
+function beginPlayTransition() {
+  screenPlayEl.classList.remove("bg-ready", "ui-ready");
+
+  let settled = false;
+  const proceed = () => {
+    if (settled) return;
+    settled = true;
+    screenPlayEl.classList.add("bg-ready");
+    setTimeout(() => screenPlayEl.classList.add("ui-ready"), UI_REVEAL_DELAY_MS);
+    // Only now does the silent visual pre-roll begin - real audio/game
+    // playback follows automatically once it finishes (see loop()).
+    preRollRemainingSec = PRE_ROLL_SEC;
+    preRollLastFrameMs = null;
+    loop();
+  };
+
+  if (!isVideoActive()) {
+    // No background video configured for this song - the CSS fallback
+    // gradient is ready immediately, but still hold for a short beat so
+    // the screen doesn't cut straight from black to a fully-lit UI.
+    setTimeout(proceed, 150);
+    return;
+  }
+
+  // Start the background video decoding immediately, invisibly (opacity:0
+  // until proceed() runs) - so once it's revealed a moment later it's
+  // already playing smoothly instead of popping in mid-start. A genuine
+  // play() failure (caught here) moves straight to the CSS fallback and
+  // continues - it is not "still loading".
+  playBackgroundVideoIfActive().catch(() => proceed());
+
+  if (bgVideo.readyState >= 2) {
+    proceed();
+    return;
+  }
+  bgVideo.addEventListener("loadeddata", proceed, { once: true });
+  bgVideo.addEventListener("canplay", proceed, { once: true });
+  // A native decode/network error is also a genuine failure, not slow
+  // loading - move to the CSS fallback and continue.
+  bgVideo.addEventListener("error", proceed, { once: true });
+  setTimeout(proceed, EMERGENCY_FALLBACK_MS);
 }
 
 // The background video is picture-only and never the timing/audio master:
@@ -257,11 +350,11 @@ async function onPlaybackStarted() {
 // of whether the video loads, plays, or fails. A load/play failure falls
 // back to the existing CSS gradient background without stopping the game.
 //
-// This only readies the element (visible, rewound to 0) - it deliberately
-// does NOT call .play() here. Actual playback starts later via
-// playBackgroundVideoIfActive(), at the same moment real audio playback
-// resumes (see loop()'s pre-roll handling), so the video never starts
-// animating ahead of the audio during the silent pre-roll countdown.
+// This only readies the element (rewound to 0) - it deliberately does NOT
+// call .play() here. Actual playback starts moments later via
+// beginPlayTransition(), invisibly (opacity:0) at first so it's already
+// decoding smoothly by the time it's revealed - see that function for the
+// full black -> background -> UI -> real playback sequencing.
 function prepareBackgroundVideo() {
   if (!currentManifest.backgroundUrl) {
     bgVideo.style.display = "none";
@@ -383,17 +476,21 @@ function isVideoActive() {
   return !!currentManifest.backgroundUrl && bgVideo.style.display !== "none";
 }
 
+// Returns a promise so callers that care (see beginPlayTransition) can
+// tell a real failure apart from "still loading" - it resolves once
+// playback actually starts, and rejects (after switching the display over
+// to the CSS fallback itself) only on a genuine play() failure.
 function playBackgroundVideoIfActive() {
-  if (!isVideoActive()) return;
+  if (!isVideoActive()) return Promise.resolve();
   const p = bgVideo.play();
-  if (p && typeof p.catch === "function") {
-    p.catch((err) => {
-      console.warn("[bg-video] play() rejected, falling back to CSS background", err);
-      debugPanel.setVideoError(`play() rejected: ${err && err.name}: ${err && err.message}`);
-      bgVideo.style.display = "none";
-      bgFallback.style.display = "block";
-    });
-  }
+  if (!p || typeof p.catch !== "function") return Promise.resolve();
+  return p.catch((err) => {
+    console.warn("[bg-video] play() rejected, falling back to CSS background", err);
+    debugPanel.setVideoError(`play() rejected: ${err && err.name}: ${err && err.message}`);
+    bgVideo.style.display = "none";
+    bgFallback.style.display = "block";
+    throw err;
+  });
 }
 
 function setPaused(value) {
@@ -411,7 +508,7 @@ function setPaused(value) {
     // finished (loop() below drives that) - pausing/resuming mid-pre-roll
     // must not skip straight into audible playback.
     if (preRollRemainingSec === null) audioEngine.resume();
-    playBackgroundVideoIfActive();
+    playBackgroundVideoIfActive().catch(() => {});
     loop();
   }
 }
@@ -446,7 +543,7 @@ function loop() {
       preRollRemainingSec = null;
       preRollLastFrameMs = null;
       audioEngine.resume();
-      playBackgroundVideoIfActive();
+      playBackgroundVideoIfActive().catch(() => {});
     } else {
       renderer.draw(-preRollRemainingSec, game, 0);
       rafId = requestAnimationFrame(loop);

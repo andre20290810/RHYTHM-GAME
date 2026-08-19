@@ -343,6 +343,54 @@ html, body {
 }
 .difficulty-buttons { display: flex; gap: 0.55rem; flex-wrap: nowrap; justify-content: center; width: 100%; }
 
+/* ---------- Song navigation (multi-song groundwork) ----------
+   Only one song exists today, so these don't switch anything yet - they
+   exist so a future song list has somewhere to plug in (see
+   selectPreviousSong()/selectNextSong() in js/main.js). Drawn as slender
+   glowing crystal triangles (Canvas-style fill/rim/glow, matching the
+   note-shard language elsewhere), not plain "△"/"▽" glyphs, and kept
+   along the right edge - clear of the artwork's face and the "虹色のエ
+   デン" lettering, and clear of the difficulty panel below. */
+#song-nav {
+  position: absolute;
+  right: 5vw;
+  top: 16%;
+  bottom: 28%;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+}
+.song-nav-btn {
+  pointer-events: auto;
+  border: none;
+  background: transparent;
+  padding: 12px;
+  margin: -12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s ease;
+}
+.song-nav-tri {
+  display: block;
+  width: 18px;
+  height: 26px;
+  background: linear-gradient(180deg, var(--silver), var(--blue-soft) 55%, var(--violet-soft));
+  opacity: 0.5;
+  filter: drop-shadow(0 0 5px rgba(160, 180, 255, 0.32));
+  transition: opacity 0.15s ease, filter 0.15s ease;
+}
+.song-nav-up .song-nav-tri { clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }
+.song-nav-down .song-nav-tri { clip-path: polygon(0% 0%, 100% 0%, 50% 100%); }
+.song-nav-btn.tapped { transform: scale(0.82); }
+.song-nav-btn.tapped .song-nav-tri {
+  opacity: 1;
+  filter: drop-shadow(0 0 13px rgba(210, 220, 255, 0.75));
+}
+
 /* ==================================================================
    Play screen - PORTRAIT layout (default & primary orientation):
    top -> falling notes -> judge line -> bottom tap area
@@ -391,6 +439,38 @@ html, body {
 #bg-dim {
   position: absolute; inset: 0;
   background: linear-gradient(180deg, rgba(4, 6, 16, 0.30) 0%, rgba(4, 6, 16, 0.02) 22%, rgba(4, 6, 16, 0.02) 68%, rgba(4, 6, 16, 0.32) 100%);
+}
+
+/* ---------- "Black -> background -> UI" game-start transition ----------
+   #bg-layer's own background-color (var(--bg-void), see above) already
+   paints the whole screen dark the instant #screen-play becomes active,
+   before any of this runs. #bg-video/#bg-fallback/#bg-dim then fade in
+   together once js/main.js's beginPlayTransition() has confirmed the
+   video is actually ready to show (or given up on a slow one and settled
+   on the dark CSS fallback instead) - never both nothing-yet AND lit-up
+   gameplay at the same time. Lanes/canvas/judge-pads/touch-zones/HUD fade
+   in afterward, once #screen-play carries "ui-ready" too, so they can
+   never appear ahead of the background. Purely visual - no note timing,
+   judge window, or audio.currentTime handling lives here. */
+#bg-video, #bg-fallback, #bg-dim {
+  opacity: 0;
+  transition: opacity 0.9s ease;
+}
+#screen-play.bg-ready #bg-video,
+#screen-play.bg-ready #bg-fallback,
+#screen-play.bg-ready #bg-dim {
+  opacity: 1;
+}
+#lanes-overlay, #notes-canvas, #judge-pads, #touch-zones, #hud {
+  opacity: 0;
+  transition: opacity 0.7s ease;
+}
+#screen-play.ui-ready #lanes-overlay,
+#screen-play.ui-ready #notes-canvas,
+#screen-play.ui-ready #judge-pads,
+#screen-play.ui-ready #touch-zones,
+#screen-play.ui-ready #hud {
+  opacity: 1;
 }
 
 /* Lane boundaries themselves are drawn on the canvas (js/renderer.js) with

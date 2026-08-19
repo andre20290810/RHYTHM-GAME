@@ -29,16 +29,17 @@
     </button>
   </section>
 
+  <section id="screen-songlist" class="screen">
+    <div id="songlist-bg" aria-hidden="true"></div>
+    <div class="veil-panel songlist-panel">
+      <h2 class="songlist-title">SELECT SONG</h2>
+      <div id="songlist-items"></div>
+      <button id="btn-songlist-back" class="btn-text">戻る</button>
+    </div>
+  </section>
+
   <section id="screen-select" class="screen">
     <div id="select-bg" aria-hidden="true"></div>
-    <div id="song-nav">
-      <button id="btn-song-prev" class="song-nav-btn song-nav-up" type="button" aria-label="前の曲へ">
-        <span class="song-nav-tri"></span>
-      </button>
-      <button id="btn-song-next" class="song-nav-btn song-nav-down" type="button" aria-label="次の曲へ">
-        <span class="song-nav-tri"></span>
-      </button>
-    </div>
     <div class="veil-panel select-panel">
       <div class="difficulty-buttons">
         <button class="btn-diff" data-diff="EASY">EASY</button>
@@ -66,10 +67,10 @@
     <canvas id="notes-canvas"></canvas>
 
     <div id="judge-pads">
-      <div class="judge-pad" data-lane="0"><span class="pad-core"></span><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="1"><span class="pad-core"></span><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="2"><span class="pad-core"></span><span class="pad-ripple"></span></div>
-      <div class="judge-pad" data-lane="3"><span class="pad-core"></span><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="0"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="1"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="2"><span class="pad-ripple"></span></div>
+      <div class="judge-pad" data-lane="3"><span class="pad-ripple"></span></div>
     </div>
 
     <div id="touch-zones">
@@ -101,6 +102,16 @@
       </div>
     </div>
   </section>
+
+  <audio id="title-bgm" src="assets/audio/title-bgm.mp3" loop preload="auto" playsinline webkit-playsinline="true"></audio>
+
+  <div id="landscape-overlay" class="overlay hidden">
+    <div class="veil-panel overlay-panel landscape-panel">
+      <div class="landscape-icon" aria-hidden="true"></div>
+      <h3>PLEASE ROTATE YOUR DEVICE</h3>
+      <p>このアプリは縦画面専用です。<br />端末を縦向きに戻してください。</p>
+    </div>
+  </div>
 
   <div id="audio-error-overlay" class="overlay hidden">
     <div class="veil-panel overlay-panel error-panel">

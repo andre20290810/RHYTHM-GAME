@@ -7,6 +7,7 @@ import { DebugPanel } from "./debugPanel.js";
 
 const screens = {
   title: document.getElementById("screen-title"),
+  songlist: document.getElementById("screen-songlist"),
   select: document.getElementById("screen-select"),
   play: document.getElementById("screen-play"),
   result: document.getElementById("screen-result"),
@@ -17,6 +18,59 @@ const screens = {
 // element, different manifest, never touches audio.mp3 or the game's own
 // background video state). Always muted; this is picture-only.
 const titleBgVideo = document.getElementById("title-bg-video");
+
+// ---------- TITLE/menu BGM ----------
+// A single persistent <audio> element (never recreated), completely
+// separate from `audioEngine` above - it never touches audio.currentTime
+// as a judge clock, never plays alongside a song's own audio.mp3, and
+// reusing the same element on every play()/pause() call means it can
+// never stack overlapping instances. Started synchronously from the
+// TAP TO START gesture (see btn-start below) exactly like audioEngine's
+// own gesture-unlock pattern; looped while on TITLE/song-list, faded out
+// when a song is chosen, and hard-stopped (see startGame()) before any
+// real gameplay audio begins.
+const titleBgm = document.getElementById("title-bgm");
+titleBgm.loop = true;
+let titleBgmUnlocked = false; // true once a play() from a real gesture has resolved
+
+function playTitleBgm() {
+  titleBgm.volume = 1;
+  const p = titleBgm.play();
+  if (p && typeof p.catch === "function") {
+    p.then(() => { titleBgmUnlocked = true; }).catch(() => {});
+  } else {
+    titleBgmUnlocked = true;
+  }
+}
+
+// Hard, immediate stop - the guaranteed "never plays under real gameplay"
+// path. Called unconditionally at the start of startGame(), regardless of
+// whether a fade-out is still in progress.
+function stopTitleBgm() {
+  titleBgm.pause();
+  titleBgm.currentTime = 0;
+  titleBgm.volume = 1;
+}
+
+// Short fade-out used when leaving TITLE/song-list for a song's difficulty
+// screen - purely a nicer transition; startGame() still hard-stops the
+// element regardless of whether this finishes in time.
+function fadeOutTitleBgm(durationMs = 400) {
+  if (titleBgm.paused) return;
+  const startVolume = titleBgm.volume;
+  const startTime = performance.now();
+  function step() {
+    if (titleBgm.paused) return;
+    const t = Math.min(1, (performance.now() - startTime) / durationMs);
+    titleBgm.volume = startVolume * (1 - t);
+    if (t < 1) {
+      requestAnimationFrame(step);
+    } else {
+      stopTitleBgm();
+    }
+  }
+  requestAnimationFrame(step);
+}
 
 function showScreen(name) {
   for (const key of Object.keys(screens)) {
@@ -33,6 +87,14 @@ function showScreen(name) {
     titleBgVideo.muted = true;
     const p = titleBgVideo.play();
     if (p && typeof p.catch === "function") p.catch(() => {});
+
+    // Resume the BGM as TITLE BGM too, but only if gesture permission was
+    // already established earlier in this session - never call play()
+    // outside a real gesture on the very first attempt.
+    if (titleBgmUnlocked) {
+      titleBgm.currentTime = 0;
+      playTitleBgm();
+    }
   } else {
     titleBgVideo.pause();
   }
@@ -84,14 +146,50 @@ bgVideo.addEventListener("playing", () => {
   bgFallback.style.display = "none";
 });
 
-async function init() {
+// Populated once at startup from songs/index.json (loadCatalog()) - never
+// hardcoded song names here. Only entry.enabled === true entries are
+// tappable; the rest render as visually inert "locked" cards. Adding a
+// future song is purely a data change (flip enabled to true, provide a
+// manifest with its own audio/background/charts) - nothing here branches
+// on a specific song's name or id.
+let catalog = [];
+
+function renderSongList(entries) {
+  const container = document.getElementById("songlist-items");
+  container.innerHTML = "";
+  const sorted = [...entries].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
+  for (const entry of sorted) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `song-card ${entry.enabled ? "enabled" : "disabled"}`;
+    card.disabled = !entry.enabled;
+
+    const titleSpan = document.createElement("span");
+    titleSpan.className = "song-card-title";
+    titleSpan.textContent = entry.title || entry.id;
+    card.appendChild(titleSpan);
+
+    if (!entry.enabled) {
+      const tag = document.createElement("span");
+      tag.className = "song-card-tag";
+      tag.textContent = "COMING SOON";
+      card.appendChild(tag);
+    } else {
+      card.addEventListener("click", () => selectSong(entry));
+    }
+
+    container.appendChild(card);
+  }
+}
+
+// Loads the chosen song's manifest only now (not eagerly at startup) - the
+// song list itself only ever needed the lightweight catalog entries above.
+async function selectSong(entry) {
   try {
-    const catalog = await loadCatalog();
-    currentManifest = await loadManifest(catalog[0]);
-    // The song title is already shown large in the background artwork itself
-    // (see #select-bg) - no need to print it again as a separate UI label.
+    currentManifest = await loadManifest(entry);
     // Start buffering immediately (no gesture required just to load bytes -
-    // only the later .play() call needs to be inside a tap handler).
+    // only the later .play() call in startGame() needs to be inside a tap
+    // handler).
     audioEngine.setSource(currentManifest.audioUrl);
     debugPanel.checkMp3Status(currentManifest.audioUrl);
 
@@ -102,6 +200,18 @@ async function init() {
       bgVideo.style.display = "none";
       bgFallback.style.display = "block";
     }
+
+    fadeOutTitleBgm();
+    showScreen("select");
+  } catch (err) {
+    showAudioError(err.message);
+  }
+}
+
+async function init() {
+  try {
+    catalog = await loadCatalog();
+    renderSongList(catalog);
   } catch (err) {
     showAudioError(err.message);
   }
@@ -118,51 +228,16 @@ async function init() {
 }
 
 document.getElementById("btn-start").addEventListener("click", () => {
-  // Best-effort "prime" of the media element on the very first tap: some
-  // iOS Safari versions mark an element as user-activated only after its
-  // FIRST play() call happens inside a real gesture, which then makes a
-  // LATER programmatic play() (e.g. after choosing a difficulty) behave
-  // more reliably too. Errors here are ignored - the real, authoritative
-  // play() attempt (with full error handling) happens in startGame().
-  try {
-    const p = audioEngine.element.play();
-    if (p && typeof p.catch === "function") p.catch(() => {});
-    audioEngine.element.pause();
-    audioEngine.element.currentTime = 0;
-  } catch (e) {
-    /* ignore - startGame() will surface any real failure */
-  }
-  showScreen("select");
+  // Start the TITLE BGM synchronously, inside this real gesture, exactly
+  // like audioEngine's own gesture-unlock pattern - must be the first
+  // thing this handler does, no `await` before it.
+  playTitleBgm();
+  showScreen("songlist");
 });
+
+document.getElementById("btn-songlist-back").addEventListener("click", () => showScreen("title"));
 
 document.getElementById("btn-back-title").addEventListener("click", () => showScreen("title"));
-
-// Only one song exists today, so these don't switch anything yet - they're
-// wired so a future song list can plug real logic into
-// selectPreviousSong()/selectNextSong() without touching the button
-// markup, styling, or feedback animation again.
-function songNavTapFeedback(btn) {
-  btn.classList.remove("tapped");
-  void btn.offsetWidth; // restart the CSS transition
-  btn.classList.add("tapped");
-  setTimeout(() => btn.classList.remove("tapped"), 220);
-}
-function selectPreviousSong() {
-  // No-op for now - only one song is available. A future catalog with
-  // multiple songs would update currentManifest/select-bg/song-nav state
-  // here and re-render the select screen.
-}
-function selectNextSong() {
-  // No-op for now - see selectPreviousSong().
-}
-document.getElementById("btn-song-prev").addEventListener("click", (e) => {
-  songNavTapFeedback(e.currentTarget);
-  selectPreviousSong();
-});
-document.getElementById("btn-song-next").addEventListener("click", (e) => {
-  songNavTapFeedback(e.currentTarget);
-  selectNextSong();
-});
 
 document.querySelectorAll(".btn-diff").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -204,6 +279,10 @@ function hideAudioError() {
 // broke playback in the previous (AudioContext-based) version.
 function startGame() {
   hideAudioError();
+  // Guaranteed stop, regardless of whether the fade-out started in
+  // selectSong() has finished yet - real gameplay must never overlap the
+  // TITLE BGM with the song's own audio.mp3.
+  stopTitleBgm();
 
   let playPromise;
   try {
@@ -581,6 +660,53 @@ function finishGame() {
   showScreen("result");
 }
 
+// ---------- Portrait-only lock ----------
+// Applies to the whole app, every screen, including mid-gameplay. The
+// overlay itself (a fixed, full-viewport element - see css/style.css)
+// already blocks taps on anything underneath it; the extra work here is
+// making sure gameplay actually STOPS progressing while landscape rather
+// than merely being visually covered - the audio clock, note positions,
+// and background video must not keep advancing behind the overlay, or the
+// chart position would visibly jump forward the moment portrait returns.
+const landscapeOverlay = document.getElementById("landscape-overlay");
+
+function isLandscape() {
+  return window.matchMedia("(orientation: landscape)").matches;
+}
+
+function handleOrientationChange() {
+  if (isLandscape()) {
+    landscapeOverlay.classList.remove("hidden");
+    if (screens.play.classList.contains("active") && !paused && game) {
+      setPaused(true);
+    }
+  } else {
+    landscapeOverlay.classList.add("hidden");
+    // Never auto-resume - if gameplay was paused (whether by this
+    // landscape lock or already manually paused), it STAYS paused; the
+    // player must tap RESUME explicitly (see setPaused/#pause-overlay).
+    // Recompute the canvas/lane/judge-pad scale from the CURRENT portrait
+    // dimensions right away, before any resume is possible, so notes are
+    // never drawn at a size carried over from the landscape layout.
+    if (screens.play.classList.contains("active")) {
+      renderer.resize();
+    }
+  }
+}
+
+window.addEventListener("orientationchange", handleOrientationChange);
+window.addEventListener("resize", handleOrientationChange);
+if (window.matchMedia) {
+  const orientationQuery = window.matchMedia("(orientation: landscape)");
+  if (orientationQuery.addEventListener) {
+    orientationQuery.addEventListener("change", handleOrientationChange);
+  } else if (orientationQuery.addListener) {
+    orientationQuery.addListener(handleOrientationChange);
+  }
+}
+// Cover the case where the app is first loaded already in landscape.
+handleOrientationChange();
+
 init();
 
 // QA hook, inert unless ?debug is in the URL: lets automated tests jump the
@@ -591,7 +717,10 @@ if (new URLSearchParams(location.search).has("debug")) {
     audioEngine,
     bgVideo,
     renderer,
+    titleBgm,
+    landscapeOverlay,
     getGame: () => game,
     getManifest: () => currentManifest,
+    getCatalog: () => catalog,
   };
 }

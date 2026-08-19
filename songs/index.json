@@ -1,6 +1,30 @@
 [
   {
     "id": "nijiiro-eden-2",
+    "title": "虹色のエデン",
+    "enabled": true,
+    "displayOrder": 1,
     "manifest": "nijiiro-eden-2/manifest.json"
+  },
+  {
+    "id": "end-of-legends",
+    "title": "END OF LEGENDS",
+    "enabled": false,
+    "displayOrder": 2,
+    "manifest": null
+  },
+  {
+    "id": "devil-in-the-fire",
+    "title": "DEVIL IN THE FIRE",
+    "enabled": false,
+    "displayOrder": 3,
+    "manifest": null
+  },
+  {
+    "id": "uprising-overdrive-vortex",
+    "title": "UPRISING OVERDRIVE VORTEX",
+    "enabled": false,
+    "displayOrder": 4,
+    "manifest": null
   }
 ]

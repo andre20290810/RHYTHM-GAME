@@ -60,7 +60,8 @@ async function init() {
   try {
     const catalog = await loadCatalog();
     currentManifest = await loadManifest(catalog[0]);
-    document.getElementById("select-song-title").textContent = currentManifest.title;
+    // The song title is already shown large in the background artwork itself
+    // (see #select-bg) - no need to print it again as a separate UI label.
     // Start buffering immediately (no gesture required just to load bytes -
     // only the later .play() call needs to be inside a tap handler).
     audioEngine.setSource(currentManifest.audioUrl);

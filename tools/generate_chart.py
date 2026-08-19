@@ -5,36 +5,57 @@ playable EASY / NORMAL / HARD note charts for the RHYTHM-GAME piano-tile
 engine.
 
 Nothing here is specific to any one song - every decision is driven by the
-numbers in analysis.json (onset times/strengths/categories/bands,
-beat/downbeat times, section labels). Running this script against a
-different song's analysis.json produces a different chart with the same
-code.
+numbers in analysis.json (onset times/strengths/categories/bands, the
+beat/downbeat/8th/16th subdivision grid, bar-level repeated-pattern
+clusters, section labels). Running this script against a different song's
+analysis.json produces a different chart with the same code.
 
-Design (v2 - layered/hierarchical):
-  - Notes come ONLY from real detected onsets - never a fixed-interval
-    grid, and never quantized onto the beat grid (onset TIMES are used
-    verbatim; the beat/downbeat grid is only used to judge which onsets
-    are musically important).
+Design (v3 - rhythm/groove-first, not onset-first):
+  - Selection is driven PRIMARILY by each onset's position on the rhythm
+    grid (analysis.json's grid_class: downbeat/beat/8th/16th/off_grid) and
+    its musical category (kick/snare/phrase_start/other), not by raw onset
+    strength percentiles alone. An onset existing is not enough to become a
+    note - it has to play a legible RHYTHMIC role.
+  - Selective quantization, not "onset time used verbatim" and not
+    "everything snapped to the grid" either: an onset within a tight
+    tolerance of its nearest grid point (i.e. almost certainly just onset-
+    detection jitter around a hit that WAS played on the grid) is snapped
+    to that exact grid time; anything further off is left at its own raw
+    detected time - so a deliberately pushed/pulled backbeat, a syncopated
+    kick, or an off-the-grid vocal attack keeps its real human timing
+    instead of being dragged onto the grid. See onset_time_for_chart().
+  - EASY = the song's rhythmic skeleton: kicks/snares that land on a
+    downbeat or beat, plus unmistakably strong beat-aligned phrase
+    entrances. Playing EASY alone should still let you feel the song's
+    basic pulse.
+  - NORMAL = EASY, unchanged, PLUS the 8th-note groove layer (offbeat
+    kick/snare hits), secondary vocal/melody rhythm accents, and
+    section-level accents in the chorus/climax - the "most enjoyable to
+    play" standard chart.
+  - HARD = NORMAL, unchanged, PLUS meaningful 16th-note fills/detail and
+    deliberately off-grid kick/snare hits (real syncopation) - never every
+    remaining weak onset; a musical-relevance floor still applies.
+  - Repeated rhythmic phrases (see analysis.json's bar pattern_id/bar_slot)
+    get a CONSISTENT lane the first time a given (pattern, slot, kick-or-
+    snare-or-other) combination is placed, and reuse that lane on every
+    later repeat of the same phrase (falling back to the normal
+    frequency-band pick only when the remembered lane is unavailable due
+    to spacing) - so a recurring drum figure maps to a recognizable finger
+    pattern instead of re-randomizing lanes every repetition. Lane choice
+    otherwise still follows the onset's dominant frequency band.
   - There is no note-count or notes-per-second target. Each difficulty is
-    built from a QUALITY-based candidate pool (musical category + a
-    strength floor), and note count is whatever survives that pool plus
-    the playability spacing rules - never a number to hit.
-  - EASY is the song's rhythmic skeleton: kicks, phrase-start
-    (vocal/melody) onsets, and strong downbeat-aligned accents only.
-  - NORMAL = EASY's notes, unchanged, PLUS snares and secondary
-    beat-aligned accents layered on top.
-  - HARD = NORMAL's notes, unchanged, PLUS the remaining onsets that
-    still clear a minimum musical-relevance bar (rhythmically grounded
-    or clearly categorized) - weak/ornamental/reverb-tail onsets are
-    excluded at every difficulty, not just downgraded to "extra HARD
-    filler".
-  - Lane (0-3) is primarily driven by the onset's dominant frequency band
-    (bass -> lane 0 .. treble -> lane 3), not randomness.
+    built from a QUALITY-based candidate pool (rhythmic role + a strength
+    floor), and note count is whatever survives that pool plus the
+    playability spacing rules - never a number to hit.
   - Long sustained harmonic onsets (held vocal/instrument notes) become
     hold notes instead of a burst of taps.
   - Chords (two simultaneous lanes) are reserved for strong downbeats in
     high-energy sections and are rationed per difficulty.
   - No note is ever placed after the song's usable end (outro buffer).
+  - HOLD/tap concurrency rules (ALLOWED_HOLD_TAP_COMBOS) are applied LAST,
+    exactly as before - the rhythm redesign above only changes WHICH
+    onsets become candidate notes and WHEN/WHERE they land, never how
+    concurrent input is capped.
 """
 import sys
 import json
@@ -51,7 +72,6 @@ LAYER_CONFIG = {
         "hold_convert_prob": 0.55,
         "chord_prob": 0.0,
         "downbeat_window": 0.06,
-        "beat_window": 0.06,
     },
     "normal": {
         "min_gap_global": 0.15,
@@ -61,7 +81,6 @@ LAYER_CONFIG = {
         "hold_convert_prob": 0.40,
         "chord_prob": 0.10,
         "downbeat_window": 0.07,
-        "beat_window": 0.07,
     },
     "hard": {
         "min_gap_global": 0.095,
@@ -71,13 +90,24 @@ LAYER_CONFIG = {
         "hold_convert_prob": 0.30,
         "chord_prob": 0.22,
         "downbeat_window": 0.10,
-        "beat_window": 0.10,
     },
 }
 
 OUTRO_BUFFER_SEC = 1.2
 LANE_COUNT = 4
 HIGH_ENERGY_SECTIONS = {"chorus", "climax"}
+
+# How close an onset must be to its classified grid point (analysis.json's
+# grid_class/grid_time/grid_offset) to be treated as measurement jitter and
+# SNAPPED onto the grid, expressed as a fraction of the classification
+# tolerance analyze_audio.py itself used to call it "on this grid level" in
+# the first place (see classify_grid_position there). Anything further off
+# than this - while still being *classified* as e.g. "beat" for selection
+# purposes - keeps its own raw timing: a deliberately pushed/pulled
+# backbeat or a syncopated kick is never dragged onto the grid. This is a
+# conservative default (snap only the closest half of "on grid"); it is a
+# selective policy, never a blanket quantize-everything pass.
+SNAP_FRACTION = 0.5
 
 # A note only actually needs a finger down during its judgeable window, not
 # forever - mirrors JUDGE_WINDOWS_MS.GOOD from js/constants.js (140ms) as
@@ -134,41 +164,82 @@ def percentile(values, pct):
     return s[lo] + (s[hi] - s[lo]) * (k - lo)
 
 
-def build_candidate_pool(layer, onsets, used, beat_times, downbeat_times, thresholds):
-    """Onsets eligible to be ADDED at this layer, keyed by musical category
-    and a strength floor - never by picking "the next N strongest" onsets.
-    Already-used onset indices (placed in a lower layer) are excluded so a
-    higher layer only ever adds NEW notes on top."""
-    cfg = LAYER_CONFIG[layer]
+# Mirrors the tolerance fractions in analyze_audio.py's classify_grid_
+# position() - SNAP_FRACTION of these is how close an onset must be to its
+# grid point to actually get snapped (see onset_time_for_chart()).
+def snap_tolerances(bpm):
+    beat_period = 60.0 / bpm if bpm > 0 else 0.5
+    return {
+        "downbeat": beat_period * 0.18 * SNAP_FRACTION,
+        "beat": beat_period * 0.18 * SNAP_FRACTION,
+        "8th": beat_period * 0.5 * 0.22 * SNAP_FRACTION,
+        "16th": beat_period * 0.25 * 0.30 * SNAP_FRACTION,
+        "off_grid": 0.0,
+    }
+
+
+def onset_time_for_chart(o, tolerances):
+    """The TIME this onset's note is actually placed at: the exact grid
+    time if the onset is close enough to be measurement jitter around a hit
+    that WAS played on the grid, otherwise the onset's own raw detected
+    time. Never touches o["time"] itself - that stays the raw measurement
+    for provenance/offset-diagnostics."""
+    gc = o.get("grid_class", "off_grid")
+    if gc == "off_grid":
+        return o["time"]
+    tol = tolerances.get(gc, 0.0)
+    if abs(o.get("grid_offset", 0.0)) <= tol:
+        return o["grid_time"]
+    return o["time"]
+
+
+def build_candidate_pool(layer, onsets, used, sections, thresholds):
+    """Onsets eligible to be ADDED at this layer, keyed by RHYTHMIC ROLE
+    (grid position + musical category) and a strength floor - never by
+    picking "the next N strongest" onsets, and never just "this onset
+    exists". Already-used onset indices (placed in a lower layer) are
+    excluded so a higher layer only ever adds NEW notes on top."""
     pool = []
     for i, o in enumerate(onsets):
         if i in used:
             continue
+        gc = o["grid_class"]
+        cat = o["category"]
+        strong = o["strength"] >= thresholds["strong"]
+        medium = o["strength"] >= thresholds["medium"]
+        floor_ok = o["strength"] >= thresholds["floor"]
+
         if layer == "easy":
+            # The song's rhythmic skeleton: kicks/snares that land squarely
+            # on a downbeat or beat, or an unmistakably strong, beat-
+            # aligned phrase entrance - so EASY alone still lets you feel
+            # the song's basic pulse, not just "fewer random hits".
             qualifies = (
-                o["category"] == "kick"
-                or o["phrase_start"]
-                or (
-                    nearest_dist(o["time"], downbeat_times) <= cfg["downbeat_window"]
-                    and o["strength"] >= thresholds["strong"]
-                )
+                (cat == "kick" and gc in ("downbeat", "beat"))
+                or (cat == "snare" and gc in ("downbeat", "beat"))
+                or (o["phrase_start"] and gc in ("downbeat", "beat") and strong)
             )
         elif layer == "normal":
+            # EASY's skeleton plus the 8th-note groove layer (the classic
+            # "and"-of-the-beat kick/snare pattern), secondary vocal/
+            # melody rhythmic accents, and chorus/climax section accents.
             qualifies = (
-                o["category"] == "snare"
-                or o["phrase_start"]
-                or (
-                    nearest_dist(o["time"], beat_times) <= cfg["beat_window"]
-                    and o["strength"] >= thresholds["medium"]
-                )
+                (cat in ("kick", "snare") and gc == "8th")
+                or (o["phrase_start"] and gc in ("downbeat", "beat", "8th") and medium)
+                or (gc in ("beat", "8th") and strong and section_at(o["time"], sections) in HIGH_ENERGY_SECTIONS)
             )
         else:  # hard
-            if o["strength"] < thresholds["floor"]:
+            if not floor_ok:
                 continue
+            # Meaningful 16th-note fills/detail, PLUS deliberately
+            # off-grid kick/snare hits (real syncopation, a food-forward
+            # attack) - never every remaining weak onset. Still gated by a
+            # category/strength floor, not "everything that's left".
             qualifies = (
-                o["category"] in ("kick", "snare")
-                or o["phrase_start"]
-                or nearest_dist(o["time"], beat_times) <= cfg["beat_window"]
+                (cat in ("kick", "snare") and gc == "16th")
+                or (cat in ("kick", "snare") and gc == "off_grid" and medium)
+                or (o["phrase_start"] and medium)
+                or (cat == "perc_other" and gc in ("beat", "8th", "16th") and strong)
             )
         if qualifies:
             pool.append(i)
@@ -186,12 +257,12 @@ _PRIORITY_CHORD_SYNTHETIC = -1  # a chord's decorative 2nd note - sacrificed fir
 _PRIORITY_AUXILIARY = 1
 
 
-def musical_priority(onset, downbeat_times, thresholds, downbeat_window):
+def musical_priority(onset, thresholds):
     """Higher = more musically important = wins a 3+-lane conflict."""
     if onset is None:
         return _PRIORITY_CHORD_SYNTHETIC
     if onset["category"] == "kick":
-        return 5 if nearest_dist(onset["time"], downbeat_times) <= downbeat_window else 4.5
+        return 5 if onset["grid_class"] == "downbeat" else 4.5
     if onset["category"] == "snare":
         return 4
     if onset["phrase_start"]:
@@ -210,7 +281,7 @@ def note_active_window(note):
     return note["time"] - GOOD_WINDOW_SEC, note["time"] + GOOD_WINDOW_SEC
 
 
-def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, downbeat_times, thresholds, downbeat_window):
+def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, thresholds):
     """Drops notes so that no instant ever asks the player for a
     (concurrent-holds, concurrent-taps) combination outside
     ALLOWED_HOLD_TAP_COMBOS - counting a tap's judge window AND a hold's
@@ -236,7 +307,7 @@ def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, downbeat_time
     def priority_of(idx):
         oid = note_onset_ids[idx]
         onset = onsets[oid] if oid is not None else None
-        return musical_priority(onset, downbeat_times, thresholds, downbeat_window)
+        return musical_priority(onset, thresholds)
 
     def combo_of(entries, cand_type):
         holds = sum(1 for a in entries if a["type"] == "hold") + (1 if cand_type == "hold" else 0)
@@ -291,21 +362,35 @@ def enforce_concurrency_cap(notes, note_onset_ids, is_new, onsets, downbeat_time
     return kept_notes, kept_ids, kept_is_new, len(removed)
 
 
-def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times,
-                 downbeat_times, sections, thresholds, seed):
+def pattern_key(o):
+    """Identity used to remember/reuse a lane for a repeated rhythmic
+    phrase (see analysis.json's bar pattern_id/bar_slot, built in
+    analyze_audio.py's build_bar_patterns()). Grouped by kick/snare/other
+    so a kick and a snare that happen to share a 16th-slot across
+    repetitions don't fight over the same remembered lane."""
+    if o.get("pattern_id", -1) < 0 or o.get("bar_slot", -1) < 0:
+        return None
+    cat = o["category"]
+    group = "kick" if cat == "kick" else ("snare" if cat == "snare" else "other")
+    return (o["pattern_id"], o["bar_slot"], group)
+
+
+def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, sections,
+                 thresholds, pattern_lane_memory, seed):
     """Replays prev_notes (locked, never modified) in time order interleaved
     with this layer's new candidate onsets, applying spacing/hold/chord
     rules from this layer's config only to the NEW candidates. Returns the
     combined note list (superset of prev_notes) and the updated used-id set."""
     cfg = LAYER_CONFIG[layer]
     rng = random.Random(seed)
-    candidate_ids = build_candidate_pool(layer, onsets, used, beat_times, downbeat_times, thresholds)
+    candidate_ids = build_candidate_pool(layer, onsets, used, sections, thresholds)
 
     timeline = []
     for note, onset_id in zip(prev_notes, prev_note_onset_ids):
         timeline.append((note["time"], "locked", note, onset_id))
     for i in candidate_ids:
-        timeline.append((onsets[i]["time"], "candidate", onsets[i], i))
+        chart_t = onsets[i]["_chart_time"]
+        timeline.append((chart_t, "candidate", onsets[i], i))
     timeline.sort(key=lambda x: (x[0], x[1] == "candidate"))
 
     # Locked notes (from a lower difficulty layer) can never be moved or
@@ -333,7 +418,7 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
     is_new = []
     new_used = set(used)
 
-    def pick_lane(base_band, avoid=None):
+    def pick_band_lane(base_band, avoid=None):
         nonlocal last_lane, consecutive
         lane = base_band
         if avoid is not None and lane == avoid:
@@ -342,6 +427,20 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
             choices = [l for l in range(LANE_COUNT) if l != last_lane and l != avoid]
             lane = rng.choice(choices)
         return lane
+
+    def pick_lane(o):
+        # Reuse the lane already established for this repeated rhythmic
+        # phrase (see pattern_key) whenever one exists and it wouldn't
+        # break the max-consecutive-same-lane rule; otherwise fall back to
+        # the normal dominant-frequency-band pick, and remember the choice
+        # for the NEXT repetition of this same (pattern, slot) - "the same
+        # or a recognizable similar lane pattern", not forced monotony.
+        pkey = pattern_key(o)
+        remembered = pattern_lane_memory.get(pkey) if pkey else None
+        if remembered is not None and not (remembered == last_lane and consecutive >= cfg["max_consecutive_lane"]):
+            return pkey, remembered
+        lane = pick_band_lane(o["band"])
+        return pkey, lane
 
     for t, kind, obj, onset_id in timeline:
         if kind == "locked":
@@ -363,9 +462,14 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
             continue
 
         o = obj
-        lane = pick_lane(o["band"])
+        pkey, lane = pick_lane(o)
         if t < lane_free_time[lane]:
-            continue
+            # remembered/preferred lane isn't free right now - one retry
+            # against the plain band-based pick before giving up on this
+            # onset entirely (spacing rules below still apply either way).
+            lane = pick_band_lane(o["band"])
+            if t < lane_free_time[lane]:
+                continue
         is_chord_partner_of_prev = notes and abs(notes[-1]["time"] - t) < 0.02
         if not is_chord_partner_of_prev and (t - global_last_time) < cfg["min_gap_global"]:
             continue
@@ -395,6 +499,8 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
         note_onset_ids.append(onset_id)
         is_new.append(True)
         new_used.add(onset_id)
+        if pkey and pkey not in pattern_lane_memory:
+            pattern_lane_memory[pkey] = lane
         if lane == last_lane:
             consecutive += 1
         else:
@@ -406,7 +512,7 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
         can_chord = (
             cfg["chord_prob"] > 0
             and not is_hold
-            and nearest_dist(t, downbeat_times) <= cfg["downbeat_window"]
+            and o["grid_class"] == "downbeat"
             and section_at(t, sections) in HIGH_ENERGY_SECTIONS
             and o["strength"] > 0.7
             and rng.random() < cfg["chord_prob"]
@@ -430,9 +536,10 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, beat_times
     # ALLOWED_HOLD_TAP_COMBOS (tap judge windows + hold durations combined).
     # Only THIS layer's own new candidates (is_new_sorted[i] is True) can
     # ever be dropped here - notes carried in from a lower difficulty are
-    # never touched, preserving EASY subset NORMAL subset HARD.
+    # never touched, preserving EASY subset NORMAL subset HARD. This is the
+    # LAST step applied, exactly as before the rhythm redesign.
     notes_sorted, ids_sorted, is_new_sorted, dropped = enforce_concurrency_cap(
-        notes_sorted, ids_sorted, is_new_sorted, onsets, downbeat_times, thresholds, cfg["downbeat_window"],
+        notes_sorted, ids_sorted, is_new_sorted, onsets, thresholds,
     )
     return notes_sorted, ids_sorted, new_used, dropped
 
@@ -441,9 +548,11 @@ def generate_all_difficulties(analysis, base_seed):
     duration = analysis["duration_sec"]
     usable_end = duration - OUTRO_BUFFER_SEC
     onsets = [o for o in analysis["onsets"] if o["time"] < usable_end]
-    beat_times = analysis["beat_times"]
-    downbeat_times = analysis["downbeat_times"]
     sections = analysis["sections"]
+
+    tolerances = snap_tolerances(analysis["bpm"])
+    for o in onsets:
+        o["_chart_time"] = onset_time_for_chart(o, tolerances)
 
     strengths = [o["strength"] for o in onsets]
     thresholds = {
@@ -456,10 +565,11 @@ def generate_all_difficulties(analysis, base_seed):
     notes, ids = [], []
     results = {}
     conflicts = {}
+    pattern_lane_memory = {}
     for layer_i, layer in enumerate(["easy", "normal", "hard"]):
         notes, ids, used, dropped = build_layer(
-            layer, notes, ids, onsets, used, beat_times, downbeat_times, sections,
-            thresholds, seed=base_seed + layer_i,
+            layer, notes, ids, onsets, used, sections,
+            thresholds, pattern_lane_memory, seed=base_seed + layer_i,
         )
         results[layer] = list(notes)  # snapshot - "hard" continues building on this list
         conflicts[layer] = dropped

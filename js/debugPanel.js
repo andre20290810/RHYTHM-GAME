@@ -55,6 +55,11 @@ export class DebugPanel {
     this.render();
   }
 
+  bindTitleVideo(videoEl) {
+    this.titleVideoEl = videoEl;
+    this.render();
+  }
+
   setPlayResult(text) {
     this.extra.playResult = text;
     this.render();
@@ -65,10 +70,16 @@ export class DebugPanel {
     this.render();
   }
 
+  setTitleVideoError(text) {
+    this.extra.titleVideoError = text;
+    this.render();
+  }
+
   render() {
     if (!this.enabled || !this.el) return;
     const a = this.audioEl;
     const v = this.videoEl;
+    const t = this.titleVideoEl;
     const lines = [
       `UA: ${this.extra.userAgent || ""}`,
       `AudioContext.state: ${this.extra.audioContextState}`,
@@ -93,6 +104,15 @@ export class DebugPanel {
       `video paused: ${v ? v.paused : "-"}`,
       `video error: ${v && v.error ? `MediaError code ${v.error.code}` : "none"}`,
       `video error (from play()/event): ${this.extra.videoError || "none"}`,
+      "--- <video> TITLE/menu element ---",
+      `title video readyState: ${t ? `${t.readyState} (${READY_STATES[t.readyState] || "?"})` : "-"}`,
+      `title video networkState: ${t ? `${t.networkState} (${NETWORK_STATES[t.networkState] || "?"})` : "-"}`,
+      `title video currentSrc: ${t ? t.currentSrc : "-"}`,
+      `title video videoWidth x videoHeight: ${t ? `${t.videoWidth}x${t.videoHeight}` : "-"}`,
+      `title video paused: ${t ? t.paused : "-"}`,
+      `title video currentTime: ${t ? t.currentTime.toFixed(3) : "-"}`,
+      `title video error: ${t && t.error ? `MediaError code ${t.error.code}` : "none"}`,
+      `title video error (from play()/event): ${this.extra.titleVideoError || "none"}`,
     ];
     this.el.textContent = lines.join("\n");
   }

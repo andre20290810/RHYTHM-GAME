@@ -137,6 +137,156 @@ def dominant_band(mel_spec, mel_freqs, frame_idx, n_frames, band_baseline):
     return int(np.argmax(ratio))
 
 
+def nearest_value_and_dist(t, sorted_times):
+    """Binary-search nearest neighbour in a sorted list - returns
+    (nearest_value, abs_distance). Used for beat/downbeat/subdivision grid
+    classification below; distinct from generate_chart.py's own
+    nearest_dist() (that one only needs the distance, not the value, and
+    lives on the other side of the analysis/chart-generation boundary)."""
+    if len(sorted_times) == 0:
+        return None, 999.0
+    lo, hi = 0, len(sorted_times) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if sorted_times[mid] < t:
+            lo = mid + 1
+        else:
+            hi = mid
+    candidates = [lo]
+    if lo > 0:
+        candidates.append(lo - 1)
+    best_i = min(candidates, key=lambda i: abs(sorted_times[i] - t))
+    return sorted_times[best_i], abs(sorted_times[best_i] - t)
+
+
+def build_subdivision_grid(beat_times):
+    """8th/16th grid points interpolated between each consecutive pair of
+    DETECTED beats, not a synthetic constant-BPM grid - this adapts to the
+    song's own local tempo (including any natural drift) the same way the
+    beat grid itself already does."""
+    beat_times = list(beat_times)
+    eighth, sixteenth = [], []
+    for i in range(len(beat_times) - 1):
+        t0, t1 = beat_times[i], beat_times[i + 1]
+        span = t1 - t0
+        for frac in (0.0, 0.5):
+            eighth.append(t0 + span * frac)
+        for frac in (0.0, 0.25, 0.5, 0.75):
+            sixteenth.append(t0 + span * frac)
+    if beat_times:
+        eighth.append(beat_times[-1])
+        sixteenth.append(beat_times[-1])
+    eighth = sorted(set(round(x, 4) for x in eighth))
+    sixteenth = sorted(set(round(x, 4) for x in sixteenth))
+    return eighth, sixteenth
+
+
+def classify_grid_position(t, downbeat_times, beat_times, eighth_grid, sixteenth_grid, beat_period):
+    """Where does this onset sit on the rhythmic grid? Coarsest match wins
+    (a hit that is close to both a beat and a 16th point is reported as
+    "beat", not "16th") - tolerances are fractions of the beat period so
+    they scale correctly with this song's own tempo, not a fixed ms value.
+    Returns (grid_class, grid_time, grid_offset) where grid_offset is the
+    SIGNED (onset.time - grid_time) distance in seconds - generate_chart.py
+    uses this to decide whether an onset is close enough to be measurement
+    jitter (safe to snap) or a genuine, deliberate off-grid timing choice
+    (never snapped)."""
+    tol_beat = beat_period * 0.18
+    tol_eighth = beat_period * 0.5 * 0.22
+    tol_sixteenth = beat_period * 0.25 * 0.30
+
+    db_val, db_dist = nearest_value_and_dist(t, downbeat_times)
+    if db_dist <= tol_beat:
+        return "downbeat", db_val, t - db_val
+
+    b_val, b_dist = nearest_value_and_dist(t, beat_times)
+    if b_dist <= tol_beat:
+        return "beat", b_val, t - b_val
+
+    e_val, e_dist = nearest_value_and_dist(t, eighth_grid)
+    if e_dist <= tol_eighth:
+        return "8th", e_val, t - e_val
+
+    s_val, s_dist = nearest_value_and_dist(t, sixteenth_grid)
+    if s_dist <= tol_sixteenth:
+        return "16th", s_val, t - s_val
+
+    return "off_grid", t, 0.0
+
+
+def build_bar_patterns(onsets, downbeat_times, duration, similarity_threshold=0.75):
+    """Groups bars (downbeat-to-downbeat spans, i.e. assumed 4/4 measures -
+    consistent with downbeat_times already being every 4th beat above) into
+    repeated-pattern clusters from their kick/snare skeleton alone, so
+    generate_chart.py can give the SAME rhythmic phrase a consistent lane
+    pattern each time it recurs (e.g. a chorus's kick-kick-snare-kick loop)
+    instead of re-randomizing lanes every repetition. Each bar is reduced
+    to a 16-slot (16th-note resolution) signature string; bars whose
+    signatures agree on enough slots are clustered into one pattern_id via
+    simple greedy matching against previously-seen signatures - not exact
+    string equality, so near-identical fills/variations still cluster
+    together. Purely descriptive: never changes onset times or strengths.
+    Returns (bars, onset_bar_index, onset_slot) where the latter two are
+    per-onset-index lists aligned with `onsets`."""
+    edges = list(downbeat_times) + [duration]
+    bars = []
+    onset_bar_index = [-1] * len(onsets)
+    onset_slot = [-1] * len(onsets)
+
+    for bar_i in range(len(edges) - 1):
+        t0, t1 = edges[bar_i], edges[bar_i + 1]
+        span = t1 - t0
+        if span <= 0:
+            bars.append({"start": t0, "end": t1, "signature": "." * 16, "pattern_id": -1})
+            continue
+        slots = ["."] * 16
+        for oi, o in enumerate(onsets):
+            if not (t0 <= o["time"] < t1):
+                continue
+            # Use the GRID-classified time (when this onset landed on the
+            # grid at all) rather than its raw detected time - onset
+            # detection jitter of a few ms would otherwise scatter what is
+            # musically "the same slot, repeated" across neighbouring
+            # slots and defeat the whole point of pattern clustering.
+            pos_t = o["grid_time"] if o.get("grid_class") != "off_grid" else o["time"]
+            slot = int(round((pos_t - t0) / span * 16))
+            slot = max(0, min(15, slot))
+            onset_bar_index[oi] = bar_i
+            onset_slot[oi] = slot
+            if o["category"] in ("kick", "snare"):
+                # kick takes priority when two categories land on the same
+                # slot - it is the more foundational rhythmic anchor
+                if slots[slot] == "." or (slots[slot] == "S" and o["category"] == "kick"):
+                    slots[slot] = "K" if o["category"] == "kick" else "S"
+        bars.append({"start": t0, "end": t1, "signature": "".join(slots), "pattern_id": -1})
+
+    def similarity(sig_a, sig_b):
+        compared = sum(1 for a, b in zip(sig_a, sig_b) if a != "." or b != ".")
+        if compared == 0:
+            return 0.0
+        agree = sum(1 for a, b in zip(sig_a, sig_b) if a == b and a != ".")
+        return agree / compared
+
+    representatives = []  # [(pattern_id, signature)]
+    next_id = 0
+    for bar in bars:
+        if bar["signature"] == "." * 16:
+            continue  # silent/empty bar - not a "pattern" worth reusing
+        best_id, best_score = -1, 0.0
+        for pid, sig in representatives:
+            score = similarity(bar["signature"], sig)
+            if score > best_score:
+                best_score, best_id = score, pid
+        if best_id != -1 and best_score >= similarity_threshold:
+            bar["pattern_id"] = best_id
+        else:
+            bar["pattern_id"] = next_id
+            representatives.append((next_id, bar["signature"]))
+            next_id += 1
+
+    return bars, onset_bar_index, onset_slot
+
+
 def merge_onsets(times_a, strengths_a, source_a, times_b, strengths_b, source_b, merge_window=0.03):
     events = []
     for t, s in zip(times_a, strengths_a):
@@ -273,6 +423,34 @@ def analyze(path, sr_target=44100, hop_length=512):
     for o in onsets:
         o["phrase_start"] = "harm" in o["source"] and is_phrase_start(o["time"])
 
+    # --- rhythm grid classification (beat-first redesign) ---
+    # Every onset is placed on the beat/downbeat/8th/16th subdivision grid
+    # (or "off_grid" if it truly isn't close to any of them) so
+    # generate_chart.py can select and quantize by RHYTHMIC role instead of
+    # raw onset strength alone. grid_offset is signed and always measured
+    # against the onset's own RAW detected time - nothing here modifies
+    # o["time"] itself; quantization (if any) happens downstream.
+    beat_period = 60.0 / bpm if bpm > 0 else 0.5
+    eighth_grid, sixteenth_grid = build_subdivision_grid(beat_times)
+    for o in onsets:
+        grid_class, grid_time, grid_offset = classify_grid_position(
+            o["time"], downbeat_times, beat_times, eighth_grid, sixteenth_grid, beat_period
+        )
+        o["grid_class"] = grid_class
+        o["grid_time"] = round(float(grid_time), 4)
+        o["grid_offset"] = round(float(grid_offset), 4)
+
+    # --- repeated-rhythm-pattern detection (per bar, kick/snare skeleton) ---
+    # See build_bar_patterns() - lets generate_chart.py reuse a consistent
+    # lane pattern across repetitions of "the same" rhythmic phrase (e.g. a
+    # chorus's recurring kick/snare loop) instead of re-randomizing lanes
+    # every time it repeats.
+    bars, onset_bar_index, onset_slot = build_bar_patterns(onsets, downbeat_times, duration)
+    for o, bar_i, slot in zip(onsets, onset_bar_index, onset_slot):
+        o["bar_index"] = bar_i
+        o["bar_slot"] = slot
+        o["pattern_id"] = bars[bar_i]["pattern_id"] if 0 <= bar_i < len(bars) else -1
+
     # --- section detection: bar-level RMS energy + onset density ---
     rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
     rms_times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
@@ -348,6 +526,9 @@ def analyze(path, sr_target=44100, hop_length=512):
         "bpm": bpm,
         "beat_times": beat_times.tolist(),
         "downbeat_times": downbeat_times.tolist(),
+        "eighth_grid": eighth_grid,
+        "sixteenth_grid": sixteenth_grid,
+        "bars": bars,
         "onsets": onsets,
         "sections": sections,
     }

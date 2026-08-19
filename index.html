@@ -15,10 +15,19 @@
 <body>
 <div id="app">
 
+  <!-- Shared TITLE/menu world background - lives OUTSIDE any single
+       .screen so it is never destroyed/recreated when switching between
+       TITLE and the song list (both are "in the menu world"). Visibility
+       is toggled by js/main.js's showScreen() based on which of those two
+       screens is active; the video/element itself is created exactly once
+       and never removed from the DOM. -->
+  <div id="menu-bg-layer" class="menu-bg-layer active" aria-hidden="true">
+    <div id="title-bg"></div>
+    <video id="title-bg-video" class="title-bg-video" src="assets/video/title-loop.mp4" autoplay muted loop playsinline webkit-playsinline="true" preload="auto"></video>
+    <div id="title-dim"></div>
+  </div>
+
   <section id="screen-title" class="screen active">
-    <div id="title-bg" aria-hidden="true"></div>
-    <video id="title-bg-video" class="title-bg-video" src="assets/video/title-loop.mp4" muted loop playsinline webkit-playsinline="true" preload="auto" aria-hidden="true"></video>
-    <div id="title-dim" aria-hidden="true"></div>
     <button id="btn-start" class="title-tap-target">
       <h1 class="title-main">
         <span class="title-line title-line-memories">Memories</span>
@@ -103,7 +112,11 @@
     </div>
   </section>
 
-  <audio id="title-bgm" src="assets/audio/title-bgm.mp3" loop preload="auto" playsinline webkit-playsinline="true"></audio>
+  <!-- preload="none": this must not compete with the TITLE video for
+       bandwidth/decode resources at page load - it only ever needs to be
+       ready by the time the user's first real gesture (TAP TO START)
+       calls .play() on it, which is more than enough lead time. -->
+  <audio id="title-bgm" src="assets/audio/title-bgm.mp3" loop preload="none" playsinline webkit-playsinline="true"></audio>
 
   <div id="landscape-overlay" class="overlay hidden">
     <div class="veil-panel overlay-panel landscape-panel">
@@ -136,6 +149,11 @@
         <div class="stat good"><span class="label">GOOD</span><span id="result-good" class="value"></span></div>
         <div class="stat miss"><span class="label">MISS</span><span id="result-miss" class="value"></span></div>
       </div>
+      <p id="result-thanks">Thank you for playing!!</p>
+      <a id="btn-artist-page" class="btn-artist-page hidden" href="#" target="_blank" rel="noopener noreferrer">
+        <span>ARTIST PAGE</span>
+      </a>
+
       <div class="result-buttons">
         <button id="btn-retry" class="btn-veil">RETRY</button>
         <button id="btn-to-select" class="btn-text">曲選択へ</button>

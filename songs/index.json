@@ -26,5 +26,54 @@
     "enabled": false,
     "displayOrder": 4,
     "manifest": null
+  },
+  {
+    "id": "shining-rain",
+    "title": "Shining Rain",
+    "enabled": false,
+    "displayOrder": 5,
+    "manifest": null
+  },
+  {
+    "id": "ringing-my-heart",
+    "title": "Ringing My Heart",
+    "enabled": false,
+    "displayOrder": 6,
+    "manifest": null
+  },
+  {
+    "id": "oath-of-the-ancient-soul",
+    "title": "Oath Of The Ancient Soul",
+    "enabled": false,
+    "displayOrder": 7,
+    "manifest": null
+  },
+  {
+    "id": "kiva-the-ancient-blade",
+    "title": "KIVA The Ancient Blade",
+    "enabled": false,
+    "displayOrder": 8,
+    "manifest": null
+  },
+  {
+    "id": "code-name-killvaph",
+    "title": "CODE NAME: KILLVAPH",
+    "enabled": false,
+    "displayOrder": 9,
+    "manifest": null
+  },
+  {
+    "id": "angels-grave",
+    "title": "Angel's Grave",
+    "enabled": false,
+    "displayOrder": 10,
+    "manifest": null
+  },
+  {
+    "id": "artemis-arise",
+    "title": "Artemis Arise -終焉のメサイア-",
+    "enabled": false,
+    "displayOrder": 11,
+    "manifest": null
   }
 ]

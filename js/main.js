@@ -13,11 +13,53 @@ const screens = {
   result: document.getElementById("screen-result"),
 };
 
-// The title screen's own looping background video - entirely separate
+// The TITLE/menu world's own looping background video - entirely separate
 // from the per-song R2 background video used in #screen-play (different
 // element, different manifest, never touches audio.mp3 or the game's own
-// background video state). Always muted; this is picture-only.
+// background video state). Always muted; this is picture-only. Lives in a
+// shared layer (#menu-bg-layer, see index.html) OUTSIDE of #screen-title
+// itself so the exact same element/src keeps playing, uninterrupted,
+// while navigating between TITLE and the song list - it is never
+// destroyed or recreated on that transition.
 const titleBgVideo = document.getElementById("title-bg-video");
+const menuBgLayer = document.getElementById("menu-bg-layer");
+
+// Diagnostics only (visible with ?debug=1) - previously this video had NO
+// error/stall observability at all, which is exactly why a real-device
+// playback failure could happen with zero trace. None of this affects
+// playback itself.
+titleBgVideo.addEventListener("error", () => {
+  const code = titleBgVideo.error ? titleBgVideo.error.code : "?";
+  console.error("[title-bg-video] load/playback error", titleBgVideo.error);
+  debugPanel?.setTitleVideoError(`error event (MediaError code ${code})`);
+});
+titleBgVideo.addEventListener("stalled", () => debugPanel?.setTitleVideoError("stalled event"));
+
+// iOS Safari can reject an autoplay-without-gesture play() call for
+// reasons that have nothing to do with the file itself (e.g. transient
+// resource contention right at page load). The previous version silently
+// swallowed this rejection with no retry and no trace. This retries once,
+// the moment the element itself reports it has enough data to actually
+// play - by then whatever caused the first rejection has normally
+// resolved. Muted+playsinline video is exempt from the "real gesture
+// required" autoplay policy, so this retry is not a policy violation.
+function playTitleBgVideo() {
+  const p = titleBgVideo.play();
+  if (p && typeof p.catch === "function") {
+    p.then(() => debugPanel?.setTitleVideoError("none (playing)")).catch((err) => {
+      debugPanel?.setTitleVideoError(`play() rejected: ${err && err.name}: ${err && err.message} - retrying on canplay`);
+      const retry = () => {
+        const p2 = titleBgVideo.play();
+        if (p2 && typeof p2.catch === "function") {
+          p2.then(() => debugPanel?.setTitleVideoError("none (playing after retry)"))
+            .catch((err2) => debugPanel?.setTitleVideoError(`retry also rejected: ${err2 && err2.name}: ${err2 && err2.message}`));
+        }
+      };
+      if (titleBgVideo.readyState >= 3) retry();
+      else titleBgVideo.addEventListener("canplay", retry, { once: true });
+    });
+  }
+}
 
 // ---------- TITLE/menu BGM ----------
 // A single persistent <audio> element (never recreated), completely
@@ -76,6 +118,13 @@ function showScreen(name) {
   for (const key of Object.keys(screens)) {
     screens[key].classList.toggle("active", key === name);
   }
+
+  // The menu world (video + dim) is shared by TITLE and the song list -
+  // shown for both, hidden (and paused) for everything else. This layer
+  // itself is never touched by the branches below except to toggle
+  // .active; see playTitleBgVideo()/titleBgVideo.pause() for playback.
+  menuBgLayer.classList.toggle("active", name === "title" || name === "songlist");
+
   if (name === "title") {
     // Always restart from 0 on (re)entering the title screen, so the loop
     // begins cleanly every time rather than resuming mid-loop.
@@ -85,8 +134,7 @@ function showScreen(name) {
       /* not seekable yet (metadata still loading) - fine, it starts at 0 anyway */
     }
     titleBgVideo.muted = true;
-    const p = titleBgVideo.play();
-    if (p && typeof p.catch === "function") p.catch(() => {});
+    playTitleBgVideo();
 
     // Resume the BGM as TITLE BGM too, but only if gesture permission was
     // already established earlier in this session - never call play()
@@ -95,12 +143,20 @@ function showScreen(name) {
       titleBgm.currentTime = 0;
       playTitleBgm();
     }
+  } else if (name === "songlist") {
+    // Deliberately do NOT touch currentTime, and do NOT call pause() -
+    // the song list continues the exact same TITLE video/BGM state
+    // uninterrupted (it was already playing from the "title" branch
+    // above, whether just now or on a previous visit). Just make sure
+    // it's actually still playing, in case something else paused it.
+    if (titleBgVideo.paused) playTitleBgVideo();
   } else {
     titleBgVideo.pause();
   }
 }
 
 const debugPanel = new DebugPanel();
+debugPanel.bindTitleVideo(titleBgVideo);
 const audioEngine = new AudioEngine();
 debugPanel.bindAudio(audioEngine.element);
 
@@ -657,6 +713,20 @@ function finishGame() {
   document.getElementById("result-great").textContent = game.judgeCounts.GREAT;
   document.getElementById("result-good").textContent = game.judgeCounts.GOOD;
   document.getElementById("result-miss").textContent = game.judgeCounts.MISS;
+
+  // Promo link is entirely data-driven from the current song's manifest
+  // (artistUrl) - never hardcoded per-song here. A future song without an
+  // artistUrl set simply doesn't show the button rather than linking
+  // nowhere.
+  const artistBtn = document.getElementById("btn-artist-page");
+  const artistUrl = currentManifest && currentManifest.artistUrl;
+  if (artistUrl) {
+    artistBtn.href = artistUrl;
+    artistBtn.classList.remove("hidden");
+  } else {
+    artistBtn.classList.add("hidden");
+  }
+
   showScreen("result");
 }
 

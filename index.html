@@ -38,9 +38,9 @@
   <section id="screen-title" class="screen active">
     <button id="btn-start" class="title-tap-target">
       <h1 class="title-main">
-        <span class="title-line title-line-memories">Memories</span>
-        <span class="title-line title-line-of">Of</span>
-        <span class="title-line title-line-alexia">ALEXIA</span>
+        <span class="title-line title-line-1">Memories</span>
+        <span class="title-line title-line-2">Of</span>
+        <span class="title-line title-line-3">ALEXIA</span>
       </h1>
       <span class="tap-to-start">TAP TO START</span>
     </button>
@@ -134,8 +134,13 @@
           <span class="hud-label">COMBO</span>
           <div id="hud-combo"></div>
         </div>
-        <div id="hud-judge"></div>
       </div>
+      <!-- Momentary PERFECT/GREAT/GOOD/MISS feedback - centered across the
+           4 lanes, just above the judge line, so it lands right where the
+           player's eyes already are while playing (see js/main.js's
+           showJudgePopup(), unchanged - only this element's position
+           moved out of the top-left SCORE/COMBO column). -->
+      <div id="hud-judge"></div>
       <button id="btn-pause" class="btn-icon">II</button>
       <div id="hud-progress"><div id="hud-progress-bar"></div></div>
     </div>

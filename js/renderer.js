@@ -41,10 +41,14 @@ const HIT_EFFECT_BY_GRADE = {
 // below are copied byte-for-byte from what _drawHitEffects/_drawSparkle
 // Burst/_drawEmbers already hardcoded, so the default theme's visuals are
 // pixel-identical to before this system existed. A theme with a
-// `tapImageSrc` swaps ONLY the falling regular-tap-note artwork for that
-// image (via Canvas drawImage - scale/opacity/glow only, never a redrawn
-// shape) - HOLD heads/bodies/tails and the judge pads are never themed,
-// so a HOLD is always unambiguously a HOLD regardless of song.
+// `tapImageSrc` swaps the falling regular-tap-note artwork (and, if
+// `themedHoldHead` is set, the HOLD head too) for that image via Canvas
+// drawImage - deterministic scale/opacity/glow/sway only, the artwork
+// itself is never redrawn or regenerated. HOLD bodies/tails/collar rings
+// are NEVER themed, so a HOLD stays unambiguously a HOLD regardless of
+// song. `explosiveHit` adds an extra radiating-burst layer on PERFECT/
+// GREAT (see _drawRadiantBurst) on top of the shared flare/ring/sparkle/
+// ember system every theme already uses.
 const NOTE_THEMES = {
   default: {
     tapImageSrc: null,
@@ -57,9 +61,25 @@ const NOTE_THEMES = {
       sparkle: ["rgba(255,255,255,0.95)", "rgba(200,230,255,0.9)", "rgba(190,255,220,0.85)"],
       ember: ["rgba(215,255,235,0.9)", "rgba(200,225,255,0.9)"],
     },
+    explosiveHit: false,
   },
   "devil-in-the-fire": {
-    tapImageSrc: "assets/notes/devil-in-the-fire-flame.png",
+    // "Blue light veil" - a collection of blue-white light gathering into
+    // a dense base and unraveling upward into a long wavering afterglow
+    // (see tools/note-proto-v4/light-veil-v1-1.svg, the approved
+    // prototype this PNG was rasterized from - deterministic SVG->PNG,
+    // no image-generation AI). Drawn at a FIXED pixel width (see
+    // tapImageWidthPx) rather than scaled to the lane, per the approved
+    // draw-size comparison - deliberately larger than the lane so it
+    // reads as a real light effect, not a small icon. tapImageAnchorFrac
+    // is how far down the image (as a fraction of its own height) the
+    // bright base/judge point sits - measured from the actual asset
+    // (brightest-row analysis), not guessed, so the judge point lines up
+    // with the note's true (x,y) regardless of draw size.
+    tapImageSrc: "assets/notes/devil-in-the-fire-light-veil.png",
+    tapImageWidthPx: 128,
+    tapImageAnchorFrac: 0.973,
+    themedHoldHead: true,
     hitColors: {
       flareCore: "rgba(235,248,255,",
       flareMid: "rgba(140,205,255,",
@@ -69,6 +89,7 @@ const NOTE_THEMES = {
       sparkle: ["rgba(255,255,255,0.95)", "rgba(140,200,255,0.9)", "rgba(80,165,255,0.85)"],
       ember: ["rgba(160,220,255,0.9)", "rgba(90,175,255,0.9)"],
     },
+    explosiveHit: true,
   },
 };
 
@@ -382,18 +403,33 @@ export class Renderer {
 
     // a small bright collar ring where the body meets the HEAD - the one
     // shape detail a tap note never has, so a HOLD head is identifiable
-    // at a glance even though it shares the same crystal silhouette
+    // at a glance even though it shares the same crystal silhouette. For
+    // a themedHoldHead theme the head image's own bright base already
+    // sits almost exactly at headY (see tapImageAnchorFrac), so the ring
+    // belongs right at that base rather than at the default crystal's
+    // much shorter headH/2 offset - otherwise it floats far above a tall
+    // 128px head image instead of sitting at the collar.
+    const themedHead = this.theme.themedHoldHead && this.theme.tapImageSrc;
+    const collarY = themedHead ? headY - 4 : headY - headH * 0.5;
     ctx.globalAlpha = 1;
     ctx.strokeStyle = `rgba(225,240,255,${holding ? 0.9 : 0.6})`;
     ctx.lineWidth = 1.3;
     ctx.beginPath();
-    ctx.ellipse(cx, headY - headH * 0.5, ribbonW * 0.6, ribbonW * 0.26, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, collarY, ribbonW * 0.6, ribbonW * 0.26, 0, 0, Math.PI * 2);
     ctx.stroke();
 
-    // HEAD - the same drawn crystal shard as a tap note, brighter and
-    // softly pulsing while actively (correctly) held
+    // HEAD - the same falling-note art as a themed tap note (or the drawn
+    // crystal shard for the default theme), brighter and softly pulsing
+    // while actively (correctly) held. Its own judge point (see
+    // tapImageAnchorFrac) still lands exactly on headY regardless of
+    // theme, so the actual hit position/timing is untouched.
     ctx.shadowColor = holding ? "rgba(180,215,255,0.9)" : "rgba(160,200,255,0.6)";
-    this._drawShardCore(cx, headY, headW, headH, holding ? 1.7 : 1, headBoost);
+    const headGlowW = themedHead ? this.theme.tapImageWidthPx : headW;
+    if (themedHead) {
+      this._drawThemedHoldHead(cx, headY, note, currentTime, holding, headBoost);
+    } else {
+      this._drawShardCore(cx, headY, headW, headH, holding ? 1.7 : 1, headBoost);
+    }
 
     if (holding) {
       const pulse = 0.5 + 0.5 * Math.sin(currentTime * 6 + note.id);
@@ -401,7 +437,7 @@ export class Renderer {
       ctx.globalAlpha = 0.22 + pulse * 0.18;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.beginPath();
-      ctx.arc(cx, headY, headW * 0.6, 0, Math.PI * 2);
+      ctx.arc(cx, headY, headGlowW * 0.6, 0, Math.PI * 2);
       ctx.fill();
 
       // glow where the held lane meets the judge line - a clearly
@@ -580,56 +616,132 @@ export class Renderer {
   }
 
   // Themed falling tap-note visual for songs with a manifest.noteTheme
-  // that sets tapImageSrc (currently DEVIL IN THE FIRE's attached blue-
-  // flame PNG) - the attached artwork itself, drawn via Canvas drawImage
-  // with only deterministic scale/opacity/glow, never redrawn or
-  // regenerated. Deliberately quieter than the default crystal (no V-
-  // shaped echo trail, no arc flicker): "本体 + 弱いグロー + 控えめな残
-  // 光", brightening a little as it nears the judge line - the flame must
-  // never grow large enough to dominate the frame or hide the background
-  // video. HOLD heads are NOT themed (see _drawHoldNote/_drawShardCore) -
-  // only the plain tap note - so a HOLD's ribbon body/tail keep it
-  // unambiguously a HOLD regardless of song.
+  // that sets tapImageSrc (currently DEVIL IN THE FIRE's blue-white
+  // "light veil" PNG) - the attached artwork itself, drawn via Canvas
+  // drawImage with only deterministic scale/opacity/glow/sway, never
+  // redrawn or regenerated. Brightens and sways gently as it nears the
+  // judge line. If the theme also sets themedHoldHead, the HOLD head
+  // reuses this same art via _drawThemedHoldHead below; the HOLD body/
+  // tail/collar ring are still NEVER themed, so a HOLD stays unambiguously
+  // a HOLD regardless of song.
   _drawThemedImageNote(x, y, note, currentTime, img) {
     const ctx = this.ctx;
     const cx = x + this.laneWidth / 2;
     const cy = y;
     const boost = this._proximityBoost(cy);
-    const w = this.laneWidth * NOTE_W_RATIO;
+    // Fixed pixel width when the theme specifies one (see the approved
+    // draw-size comparison - DEVIL IN THE FIRE's light-veil deliberately
+    // draws larger than the lane itself), falling back to the old lane-
+    // relative sizing for any theme that doesn't set tapImageWidthPx.
+    const w = this.theme.tapImageWidthPx || this.laneWidth * NOTE_W_RATIO;
     const aspect = img.naturalHeight / (img.naturalWidth || 1);
     const h = w * aspect;
+    // Where the art's own bright base/judge point sits, as a fraction of
+    // its height (measured from the actual asset, not guessed) - so the
+    // judge point lands exactly on (cx, cy) regardless of draw size,
+    // instead of the image's vertical center landing there.
+    const anchorFrac = this.theme.tapImageAnchorFrac ?? 0.5;
+    const topY = cy - h * anchorFrac;
+
+    // Gentle per-note sway while falling ("落下中の弱い揺らぎ") - a few
+    // px of horizontal drift, deterministic from time+id so nothing needs
+    // to be stored between frames.
+    const t = currentTime + note.id * 1.7;
+    const sway = Math.sin(t * 1.6) * (w * 0.025);
 
     ctx.save();
 
-    // soft halo behind the flame, brightening on approach - same "how
-    // close am I" cue the default theme uses, recolored blue-white
-    const haloR = w * (0.55 + boost * 0.3);
-    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
-    halo.addColorStop(0, `rgba(120,195,255,${0.18 + boost * 0.2})`);
+    // soft halo behind the light, brightening on approach - same "how
+    // close am I" cue every theme uses
+    const haloR = w * (0.5 + boost * 0.28);
+    const haloY = topY + h * 0.62;
+    const halo = ctx.createRadialGradient(cx + sway, haloY, 0, cx + sway, haloY, haloR);
+    halo.addColorStop(0, `rgba(120,195,255,${0.16 + boost * 0.18})`);
     halo.addColorStop(1, "rgba(120,195,255,0)");
     ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
+    ctx.arc(cx + sway, haloY, haloR, 0, Math.PI * 2);
     ctx.fill();
 
-    // restrained afterglow - 2 faint, smaller copies trailing upward
-    // ("控えめな残光"), never a busy multi-echo trail
+    // restrained afterglow - 2 faint, smaller copies trailing upward from
+    // the same anchor point ("控えめな残光"), never a busy multi-echo trail
     for (let i = 0; i < 2; i++) {
-      const echoScale = 0.8 - i * 0.16;
-      const echoY = cy - h * (0.5 + i * 0.42);
-      ctx.globalAlpha = (0.13 - i * 0.05) * (0.5 + boost * 0.5);
-      ctx.drawImage(img, cx - (w * echoScale) / 2, echoY - (h * echoScale) / 2, w * echoScale, h * echoScale);
+      const echoScale = 0.86 - i * 0.14;
+      const echoSway = Math.sin(t * 1.6 + i * 0.8) * (w * 0.03);
+      const echoCy = cy - h * (0.16 + i * 0.13);
+      const echoTopY = echoCy - h * echoScale * anchorFrac;
+      ctx.globalAlpha = (0.12 - i * 0.04) * (0.5 + boost * 0.5);
+      ctx.drawImage(img, cx + echoSway - (w * echoScale) / 2, echoTopY, w * echoScale, h * echoScale);
     }
     ctx.globalAlpha = 1;
 
-    // the flame itself - glow increases only near the judge line, mirroring
-    // the default theme's own shadowBlur-ramps-on-approach behaviour
-    ctx.shadowColor = "rgba(110,190,255,0.7)";
-    ctx.shadowBlur = 4 + boost * 9;
-    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+    // a few small drifting particles unraveling upward near the light -
+    // deterministic per-note motion, small fixed budget (never stored)
+    for (let i = 0; i < 3; i++) {
+      const seed = i * 1.9;
+      const drift = Math.sin(t * 1.1 + seed) * (w * 0.16);
+      const py = topY + h * (0.06 + i * 0.1) - Math.abs(Math.sin(t * 0.7 + seed)) * h * 0.05;
+      const r = 1.1 + (i % 2) * 0.6;
+      ctx.globalAlpha = (0.3 + boost * 0.25) * (0.5 + 0.5 * Math.sin(t * 3 + seed));
+      ctx.fillStyle = i % 2 === 0 ? "rgba(220,240,255,0.9)" : "rgba(180,215,255,0.85)";
+      ctx.beginPath();
+      ctx.arc(cx + sway + drift, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // the light itself - glow increases only near the judge line, and it
+    // brightens/pulses very slightly, mirroring the default theme's own
+    // shadowBlur-ramps-on-approach behaviour
+    ctx.shadowColor = "rgba(110,190,255,0.75)";
+    ctx.shadowBlur = 5 + boost * 12;
+    ctx.drawImage(img, cx + sway - w / 2, topY, w, h);
     ctx.shadowBlur = 0;
 
     ctx.restore();
+  }
+
+  // HOLD-head counterpart to _drawThemedImageNote, used only when the
+  // theme sets themedHoldHead. Draws the same falling-note artwork
+  // anchored the same way (tapImageAnchorFrac keeps the art's own bright
+  // base exactly on (cx, headY), the real judge point - untouched by this
+  // purely visual reuse), slightly enlarged and with a stronger halo/glow
+  // while actively held, so "this HOLD's head" reads as the same light
+  // material as a tap note without losing the extra held-state emphasis
+  // the default crystal head already had. Falls back to the drawn crystal
+  // shard for a frame if the image hasn't finished loading yet.
+  _drawThemedHoldHead(cx, headY, note, currentTime, holding, headBoost) {
+    const img = this._themeImages[this.theme.tapImageSrc];
+    if (!img || !img.complete || !img.naturalWidth) {
+      const w = this.laneWidth * NOTE_W_RATIO;
+      this._drawShardCore(cx, headY, w, w * NOTE_ASPECT, holding ? 1.7 : 1, headBoost);
+      return;
+    }
+
+    const ctx = this.ctx;
+    const w = (this.theme.tapImageWidthPx || this.laneWidth * NOTE_W_RATIO) * (holding ? 1.08 : 1);
+    const aspect = img.naturalHeight / (img.naturalWidth || 1);
+    const h = w * aspect;
+    const anchorFrac = this.theme.tapImageAnchorFrac ?? 0.5;
+    const topY = headY - h * anchorFrac;
+
+    const t = currentTime + note.id * 1.7;
+    const sway = Math.sin(t * 1.6) * (w * 0.02);
+
+    const haloR = w * (0.5 + headBoost * 0.3) * (holding ? 1.15 : 1);
+    const haloY = topY + h * 0.62;
+    const halo = ctx.createRadialGradient(cx + sway, haloY, 0, cx + sway, haloY, haloR);
+    halo.addColorStop(0, `rgba(120,195,255,${(holding ? 0.26 : 0.16) + headBoost * 0.18})`);
+    halo.addColorStop(1, "rgba(120,195,255,0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx + sway, haloY, haloR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowColor = holding ? "rgba(150,205,255,0.9)" : "rgba(110,190,255,0.75)";
+    ctx.shadowBlur = (holding ? 9 : 5) + headBoost * 12;
+    ctx.drawImage(img, cx + sway - w / 2, topY, w, h);
+    ctx.shadowBlur = 0;
   }
 
   // Success flashes: the green icon briefly replaces the blue one at the
@@ -697,6 +809,17 @@ export class Renderer {
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
+      }
+
+      // theme-gated extra layer: the concentrated blue-white light the
+      // note carried while falling is released outward in a burst of
+      // tapered petal shapes (see _drawRadiantBurst) - PERFECT gets the
+      // most (9), GREAT a more restrained amount (5), GOOD/MISS get none
+      // at all, on top of (never instead of) the flare/ring/sparkle/ember
+      // system every theme already uses. Judge logic/grades are untouched;
+      // this only reads fx.grade, already computed by triggerHitEffect().
+      if (this.theme.explosiveHit && fx.grade !== "GOOD" && elapsed <= fx.cfg.ringSec) {
+        this._drawRadiantBurst(cx, cy, elapsed / fx.cfg.ringSec, fx.grade === "PERFECT" ? 9 : 5, hc);
       }
 
       if (fx.cfg.flashSec && elapsed <= fx.cfg.flashSec) {
@@ -778,6 +901,50 @@ export class Renderer {
       ctx.fillStyle = this.theme.hitColors.ember[i % 2];
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // The extra "release" layer explosiveHit themes add on top of the
+  // shared flare/ring/sparkle/ember system: `count` tapered petals of
+  // light shooting outward from the judge point and fading as they go,
+  // as if the light the falling note was carrying is being let go all at
+  // once ("凝縮していた光が一瞬で解放される"). Colored from the theme's
+  // own hitColors (flareCore/flareMid), same palette as everything else
+  // in the burst, so PERFECT/GREAT stay visually one family, just louder
+  // or quieter (count 9 vs 5 - see the call site in _drawHitEffects).
+  // Positions/sizes are pure functions of (progress, i), nothing pooled.
+  _drawRadiantBurst(cx, cy, progress, count, hc) {
+    const ctx = this.ctx;
+    const fade = 1 - progress;
+    const reach = this.laneWidth * (0.16 + progress * 0.68);
+    const spin = progress * 0.9;
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + spin;
+      const len = reach * (0.75 + 0.25 * Math.sin(i * 2.1));
+      const baseW = this.laneWidth * (0.045 + 0.02 * (i % 2)) * (0.4 + fade * 0.6);
+      const tipX = cx + Math.cos(angle) * len;
+      const tipY = cy + Math.sin(angle) * len;
+      const baseX = cx + Math.cos(angle) * len * 0.18;
+      const baseY = cy + Math.sin(angle) * len * 0.18;
+      const midX = cx + Math.cos(angle) * len * 0.55;
+      const midY = cy + Math.sin(angle) * len * 0.55;
+      const perpX = -Math.sin(angle) * baseW;
+      const perpY = Math.cos(angle) * baseW;
+
+      ctx.globalAlpha = fade * (i % 2 === 0 ? 0.85 : 0.6);
+      const petalGrad = ctx.createLinearGradient(baseX, baseY, tipX, tipY);
+      petalGrad.addColorStop(0, `${hc.flareCore}0.9)`);
+      petalGrad.addColorStop(0.55, `${hc.flareMid}0.55)`);
+      petalGrad.addColorStop(1, `${hc.flareMid}0)`);
+      ctx.fillStyle = petalGrad;
+      ctx.beginPath();
+      ctx.moveTo(baseX + perpX, baseY + perpY);
+      ctx.quadraticCurveTo(midX + perpX * 0.4, midY + perpY * 0.4, tipX, tipY);
+      ctx.quadraticCurveTo(midX - perpX * 0.4, midY - perpY * 0.4, baseX - perpX, baseY - perpY);
+      ctx.closePath();
       ctx.fill();
     }
     ctx.restore();

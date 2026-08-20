@@ -23,6 +23,12 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Difficulty-select screen jacket art - per-song, set from
+     manifest.jacket via js/main.js's selectSong() (see #select-bg below).
+     This default (the pre-existing artwork) only shows if a song's
+     manifest doesn't specify its own jacket. */
+  --select-jacket-url: url("../assets/title-bg.jpeg");
 }
 
 * { box-sizing: border-box; }
@@ -95,22 +101,23 @@ html, body {
    full-bleed tap target and handles its own inner spacing. */
 #screen-title { padding: 0; }
 
-/* ---------- Reference-image background (select screen only) ----------
-   The attached artwork is used unmodified as a background image. It is
-   shown in full via `contain` sizing - the image is never cropped left/
-   right (or top/bottom), so nothing in it (the figure, the decorative
-   text) is ever cut off. Any leftover space is filled by background-color
-   + a CSS gradient (not by stretching or cropping the artwork itself). A
-   second gradient layer, sized to always cover the full box, sits on top
-   of the image for text legibility - that gradient is DOM/CSS, not a
-   modification of the image's own pixels. */
+/* ---------- Jacket-art background (select screen only) ----------
+   Per-song jacket art, unmodified as a background image - see
+   --select-jacket-url above (set from manifest.jacket by js/main.js's
+   selectSong(), one manifest-driven field, no song-name branching). Shown
+   in full via `contain` sizing - the image is never cropped left/right (or
+   top/bottom), so nothing in it is ever cut off. Any leftover space is
+   filled by background-color + a CSS gradient (not by stretching or
+   cropping the artwork itself). A second gradient layer, sized to always
+   cover the full box, sits on top of the image for text legibility - that
+   gradient is DOM/CSS, not a modification of the image's own pixels. */
 #select-bg {
   position: absolute;
   inset: 0;
   background-color: var(--bg-void);
   background-image:
     linear-gradient(180deg, rgba(4,6,16,0.55) 0%, rgba(4,6,16,0.20) 30%, rgba(4,6,16,0.35) 70%, rgba(4,6,16,0.80) 100%),
-    url("../assets/title-bg.jpeg");
+    var(--select-jacket-url);
   background-size: 100% 100%, contain;
   background-position: center, center;
   background-repeat: no-repeat, no-repeat;
@@ -132,11 +139,14 @@ html, body {
 #menu-bg-layer.active { display: block; }
 
 /* The title screen no longer uses the static artwork - #title-bg is now
-   only a solid-color base layer (shows through as letterboxing on the
-   video's short axis, and as a fallback if the video fails to load), and
-   the attached loop video sits on top of it via `contain` sizing so its
-   own aspect ratio and full frame are always preserved, exactly like the
-   select-screen artwork above. Never cropped, never re-encoded. */
+   only a solid-color base layer (shows through only if the video fails to
+   load; see #title-bg-video's error handling in js/main.js), and the
+   loop video fills the full portrait viewport edge to edge via `cover`
+   (never `contain` - contain was producing visible pillarboxed blanks on
+   iPhone since neither candidate OPENING video's own aspect ratio exactly
+   matches every device's viewport aspect). A `cover` crop is explicitly
+   preferred over showing the whole frame - see the A/B video comparison
+   request this implements. */
 #title-bg {
   position: absolute;
   inset: 0;
@@ -149,8 +159,26 @@ html, body {
   z-index: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
+  object-position: center center;
   background-color: var(--bg-void);
+  transform: scale(1);
+  transform-origin: center center;
+}
+/* OPENING B (assets/video/opening-loop.mov) is a ReplayKit screen
+   recording that has ~12% solid-black bars baked into the TOP and BOTTOM
+   of its own pixel content (measured by sampling frames across the whole
+   loop: content occupies rows ~11.9%-88.1% of the frame, consistently).
+   That is source-file content, not CSS letterboxing, so object-fit alone
+   cannot remove it - `cover` would otherwise still show those bars as
+   black bands. js/openingAB.js toggles this class on #title-bg-video only
+   while OPENING B is the active video; a centered zoom pushes the baked-in
+   bars off-screen, cropping a little off the video's left/right edges too
+   (explicitly acceptable - see the request this implements). OPENING A
+   (title-loop.mp4) has no such bars (verified the same way) and never
+   gets this class. */
+.title-bg-video.opening-zoom-b {
+  transform: scale(1.34);
 }
 /* Same legibility gradient the select-screen artwork gets, layered above
    the video so the title text below always reads clearly. */
@@ -234,12 +262,17 @@ html, body {
   -webkit-text-fill-color: transparent;
   text-shadow: 0 2px 20px rgba(0, 0, 0, 0.7), 0 0 30px rgba(160, 180, 255, 0.28), 0 0 56px rgba(185, 168, 255, 0.14);
 }
-.title-line-memories {
+/* Named by POSITION (1st/2nd/3rd line), not by literal text - the actual
+   words are set from js/openingAB.js's per-OPENING titleLines (see
+   updateBrandTitle() there), so this same 3-line lockup shape/styling
+   works for "Memories / Of / ALEXIA" (OPENING A) and "Legend / Of / KIVA"
+   (OPENING B) alike, and for any future title text without new CSS. */
+.title-line-1 {
   font-size: clamp(2.0rem, 9.6vw, 3.0rem);
   letter-spacing: 0.03em;
   line-height: 1.08;
 }
-.title-line-of {
+.title-line-2 {
   font-size: clamp(1.05rem, 4.6vw, 1.5rem);
   letter-spacing: 0.32em;
   line-height: 1.3;
@@ -249,7 +282,7 @@ html, body {
      its own separate paragraph */
   margin: 0.12em 0;
 }
-.title-line-alexia {
+.title-line-3 {
   font-size: clamp(2.15rem, 10.4vw, 3.2rem);
   letter-spacing: 0.06em;
   line-height: 1.08;
@@ -258,7 +291,12 @@ html, body {
 .tap-to-start {
   position: absolute;
   left: 50%;
-  bottom: calc(9vh + var(--safe-bottom));
+  /* Moved up from the previous 9vh - still clear of the home-indicator
+     safe area, and (once STEP 2 reveals the logo) clear of .title-main's
+     block, which sits centered around top:53% and never reaches this far
+     down. Font/letter-spacing/glow/fade/breathing animation unchanged -
+     only this position moved. */
+  bottom: calc(20vh + var(--safe-bottom));
   transform: translateX(-50%);
   white-space: nowrap;
   font-size: 0.78rem;
@@ -599,9 +637,13 @@ html, body {
 }
 
 #bg-layer { position: absolute; inset: 0; overflow: hidden; background: var(--bg-void); }
-/* contain (not cover) so nothing in the source video is ever cropped;
-   #bg-layer's own background-color fills any letterboxed space. */
-#bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+/* cover (not contain) so the gameplay background fills the full portrait
+   viewport edge to edge with no pillarboxed blanks, matching the OPENING
+   screen's treatment - cropping some of the source frame is explicitly
+   acceptable here (see the request this implements). This is a visual-only
+   change: lane/judge-line/note positions and all judge/score/combo logic
+   live entirely in js/game.js and js/renderer.js and are untouched. */
+#bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; }
 #bg-fallback {
   position: absolute; inset: 0;
   background:
@@ -808,21 +850,33 @@ html, body {
 #screen-play[data-combo-tier="3"] #hud-combo { color: var(--silver); text-shadow: 0 0 10px rgba(220, 225, 255, 0.5); }
 #screen-play[data-combo-tier="4"] #hud-combo { color: var(--silver); text-shadow: 0 0 14px rgba(230, 235, 255, 0.7); }
 
-/* Judgement text: brief and quiet, tucked under COMBO - never a large
-   persistent center label. */
+/* Judgement text: brief and quiet, but now centered across the 4 lanes
+   just above the judge line (matches Renderer.judgeLineRatio = 0.82 in
+   js/renderer.js / .judge-pad's top:82% below) instead of tucked under
+   COMBO in the top-left corner - the player's eyes are already on the
+   judge line/falling notes while playing, not on the SCORE column, so the
+   feedback now lands where attention already is. Still never a large
+   persistent center label - same brief pop-then-fade as before, same
+   showJudgePopup() JS, only the position changed. Sits inside #hud
+   (position:absolute, inset:0) so it can be positioned independently of
+   the SCORE/COMBO column and #btn-pause. Clears the judge line/notes
+   themselves - top is well above judgeY, not on top of it. */
 #hud-judge {
-  margin-top: 0.35rem;
-  font-size: 0.85rem;
+  position: absolute;
+  left: 50%;
+  top: calc(82% - 4.4rem);
+  transform: translateX(-50%) scale(0.92);
+  font-size: 1.1rem;
   font-weight: 300;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   opacity: 0;
-  transform-origin: left center;
+  text-align: center;
 }
 #hud-judge.show { animation: judgePop 0.38s ease-out; }
 @keyframes judgePop {
-  0% { opacity: 0; transform: translateX(-4px) scale(0.92); }
-  22% { opacity: 0.95; transform: translateX(0) scale(1); }
-  100% { opacity: 0; transform: translateX(0) scale(1); }
+  0% { opacity: 0; transform: translateX(-50%) scale(0.85); }
+  22% { opacity: 0.95; transform: translateX(-50%) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) scale(1); }
 }
 #hud-judge.PERFECT { color: var(--silver); text-shadow: 0 0 10px rgba(230, 235, 255, 0.65); }
 #hud-judge.GREAT { color: var(--blue-soft); text-shadow: 0 0 8px rgba(150, 180, 255, 0.5); }

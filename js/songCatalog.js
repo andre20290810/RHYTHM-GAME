@@ -39,11 +39,21 @@ export async function loadManifest(entry) {
     // absolute URL, otherwise resolved relative to the song's folder.
     backgroundUrl = ABSOLUTE_URL_RE.test(src) ? src : `${BASE}${dir}${src}`;
   }
+  // The difficulty-select screen's jacket art. Unlike audio/background,
+  // this is a path from the SITE ROOT (e.g. "assets/images/jackets/...")
+  // rather than the song's own folder, since jacket art commonly lives in
+  // the shared assets/ tree instead of being duplicated per song - each
+  // song's manifest just points at whichever image is its own (see
+  // manifest.jacket). Used as-is, whether it's a root-relative path or
+  // (for a future song) an absolute URL - no BASE/dir prefix applied.
+  const jacketUrl = manifest.jacket || null;
+
   return {
     ...manifest,
     _dir: `${BASE}${dir}`,
     audioUrl: `${BASE}${dir}${manifest.audio}`,
     backgroundUrl,
+    jacketUrl,
   };
 }
 

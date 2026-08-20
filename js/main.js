@@ -289,6 +289,7 @@ let preRollLastFrameMs = null;
 
 const bgVideo = document.getElementById("bg-video");
 const bgFallback = document.getElementById("bg-fallback");
+const selectBg = document.getElementById("select-bg");
 // Enforced in JS too - never rely on the HTML `muted` attribute alone. The
 // video is picture-only; audio.mp3 (via AudioEngine) is the only audible
 // source and the only timing master.
@@ -364,6 +365,25 @@ async function selectSong(entry) {
     } else {
       bgVideo.style.display = "none";
       bgFallback.style.display = "block";
+    }
+
+    // Difficulty-select jacket art - manifest-driven (manifest.jacket via
+    // jacketUrl), never a song-name branch here. Falls back to
+    // --select-jacket-url's CSS :root default (the pre-existing artwork)
+    // for any song whose manifest doesn't set one yet - removeProperty (not
+    // setting an empty value, which would make the whole background-image
+    // list invalid) is what lets that cascade fallback actually happen.
+    // Resolved to an ABSOLUTE URL first: a relative url() stored in a CSS
+    // custom property is resolved against the stylesheet that contains the
+    // var() reference (css/style.css), not against the document/this
+    // script - a root-relative path like "assets/..." would otherwise
+    // wrongly resolve as "css/assets/...". An absolute URL sidesteps that
+    // entirely since it has no base-relative ambiguity.
+    if (currentManifest.jacketUrl) {
+      const jacketAbsoluteUrl = new URL(currentManifest.jacketUrl, document.baseURI).href;
+      selectBg.style.setProperty("--select-jacket-url", `url("${jacketAbsoluteUrl}")`);
+    } else {
+      selectBg.style.removeProperty("--select-jacket-url");
     }
 
     fadeOutTitleBgm();

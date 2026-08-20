@@ -216,7 +216,15 @@ html, body {
   font-style: italic;
   font-weight: 400;
   color: var(--ink);
-  animation: titleFadeIn 1.6s ease-out both;
+  /* OPENING STEP 1: hidden entirely (not just faint) - only the background
+     video + TAP TO START show. js/main.js adds .step2 to #screen-title on
+     the first tap, which is what reveals this - see the transition below. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.4s ease-out;
+}
+#screen-title.step2 .title-main {
+  opacity: 1;
 }
 .title-line {
   display: block;
@@ -247,11 +255,6 @@ html, body {
   line-height: 1.08;
   font-weight: 500;
 }
-@keyframes titleFadeIn {
-  0% { opacity: 0; transform: translate(-50%, -46%); }
-  100% { opacity: 1; transform: translate(-50%, -50%); }
-}
-
 .tap-to-start {
   position: absolute;
   left: 50%;
@@ -269,6 +272,102 @@ html, body {
 @keyframes tapToStartBreathe {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 0.9; }
+}
+
+/* ---------- DEV-ONLY, TEMPORARY: OPENING A/B comparison switch ----------
+   See index.html/js/openingAB.js. Deliberately quiet - silver/pale-blue,
+   low opacity, only a faint glow on the active choice - and tucked into a
+   top corner (safe-area aware) well clear of the centered logo and the
+   bottom-anchored TAP TO START/GAME START label, so it never competes
+   with them. Remove this whole block along with the HTML/JS pieces once
+   a final OPENING video is chosen (see the request this implements). */
+.opening-ab-switch {
+  position: absolute;
+  top: calc(0.9rem + var(--safe-top));
+  right: calc(0.9rem + var(--safe-right));
+  z-index: 50;
+  display: flex;
+  gap: 0.4rem;
+}
+.opening-ab-btn {
+  font-family: inherit;
+  font-size: 0.56rem;
+  letter-spacing: 0.1em;
+  color: rgba(225, 232, 255, 0.55);
+  background: rgba(30, 36, 60, 0.28);
+  border: 1px solid rgba(210, 220, 255, 0.18);
+  border-radius: 999px;
+  padding: 0.32em 0.68em;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.opening-ab-btn.active {
+  color: rgba(240, 246, 255, 0.92);
+  background: rgba(120, 160, 255, 0.16);
+  border-color: rgba(190, 210, 255, 0.4);
+  box-shadow: 0 0 10px rgba(150, 180, 255, 0.25);
+}
+
+/* ---------- OPENING loading overlay ----------
+   Shown only while the OPENING background video isn't confirmed ready to
+   render a frame yet (see js/main.js's watchOpeningVideoLoading()) - a
+   fixed layer above everything (including .title-tap-target) so STEP 1
+   can't be tapped before there's actually something to look at. Never a
+   generic spinner - progress reflects only what the video element itself
+   reports (readyState tier + buffered-vs-duration), never a fabricated
+   number. */
+#title-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 5, 12, 0.55);
+  opacity: 1;
+  transition: opacity 0.5s ease;
+}
+#title-loading-overlay.hidden { display: none; }
+#title-loading-overlay.fading { opacity: 0; pointer-events: none; }
+.title-loading-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 1.1rem 1.7rem;
+  border-radius: 14px;
+  border: 1px solid rgba(220, 228, 255, 0.16);
+  background: rgba(14, 18, 42, 0.4);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.title-loading-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.32em;
+  opacity: 0.75;
+  color: var(--ink);
+}
+.title-loading-bar-track {
+  width: 42vw;
+  max-width: 12rem;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(220, 228, 255, 0.12);
+  overflow: hidden;
+}
+.title-loading-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--blue-soft), var(--violet-soft));
+  transition: width 0.25s ease;
+}
+.title-loading-pct {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Quiet buttons: hairline outline, soft glow only, no motion loops ---------- */

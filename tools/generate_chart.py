@@ -10,52 +10,67 @@ beat/downbeat/8th/16th subdivision grid, bar-level repeated-pattern
 clusters, section labels). Running this script against a different song's
 analysis.json produces a different chart with the same code.
 
-Design (v3 - rhythm/groove-first, not onset-first):
+Design (v4 - percussion stays onset-first, harmonic goes phrase-first):
+  PERCUSSIVE (kick/snare/perc_other) - unchanged from v3:
   - Selection is driven PRIMARILY by each onset's position on the rhythm
     grid (analysis.json's grid_class: downbeat/beat/8th/16th/off_grid) and
-    its musical category (kick/snare/phrase_start/other), not by raw onset
-    strength percentiles alone. An onset existing is not enough to become a
-    note - it has to play a legible RHYTHMIC role.
-  - Selective quantization, not "onset time used verbatim" and not
-    "everything snapped to the grid" either: an onset within a tight
-    tolerance of its nearest grid point (i.e. almost certainly just onset-
-    detection jitter around a hit that WAS played on the grid) is snapped
-    to that exact grid time; anything further off is left at its own raw
-    detected time - so a deliberately pushed/pulled backbeat, a syncopated
-    kick, or an off-the-grid vocal attack keeps its real human timing
-    instead of being dragged onto the grid. See onset_time_for_chart().
-  - EASY = the song's rhythmic skeleton: kicks/snares that land on a
-    downbeat or beat, plus unmistakably strong beat-aligned phrase
-    entrances. Playing EASY alone should still let you feel the song's
-    basic pulse.
-  - NORMAL = EASY, unchanged, PLUS the 8th-note groove layer (offbeat
-    kick/snare hits), secondary vocal/melody rhythm accents, and
-    section-level accents in the chorus/climax - the "most enjoyable to
-    play" standard chart.
-  - HARD = NORMAL, unchanged, PLUS meaningful 16th-note fills/detail and
-    deliberately off-grid kick/snare hits (real syncopation) - never every
-    remaining weak onset; a musical-relevance floor still applies.
+    its musical category, not by raw onset strength percentiles alone. A
+    percussive onset has a real physical attack, so ITS OWN onset time is
+    the musically meaningful moment - see onset_time_for_chart() for the
+    selective quantization policy (snap only when the onset is close
+    enough to its grid point to be measurement jitter; a deliberately
+    pushed/pulled backbeat or a syncopated kick keeps its raw timing).
+  - EASY = the song's rhythmic skeleton: kicks/snares on a downbeat/beat.
+  - NORMAL = EASY, unchanged, PLUS the 8th-note groove layer and
+    section-level percussive accents in the chorus/climax.
+  - HARD = NORMAL, unchanged, PLUS meaningful 16th-note fills and
+    deliberately off-grid kick/snare hits (real syncopation).
+
+  HARMONIC (pads/vocals/sustained/atmospheric material) - v4 redesign:
+  - This material frequently has NO clean attack at all (reverb, pads,
+    long sustains), so treating "onset time" as automatically the right
+    note time - the v3 approach - falls apart on ambient-leaning tracks.
+    analyze_audio.py's resolve_phrase_anchor() instead evaluates, per
+    harmonic phrase, THREE candidate moments (its own onset if any, its
+    local RMS peak, its RMS-weighted phrase center) and scores each one on
+    grid alignment AND local energy/phrase-presence together - never grid
+    distance alone - keeping whichever is most musically natural. The
+    chosen time is already fully resolved (grid-snapped, or deliberately
+    left off-grid for a genuinely prominent moment) by the time it reaches
+    this file, in analysis.json's harmonic_phrases[].
+  - This applies to ALL harmonic phrases, not just ambient-labelled ones -
+    a non-ambient section's vocal/pad accents get the same treatment,
+    since even a driven section's harmonic layer rarely has a clean attack
+    either. Percussive selection is completely unaffected.
+  - Ambient bars (analysis.json's bars[].is_ambient) get a DELIBERATELY
+    thinner harmonic layer at every difficulty - see AMBIENT_HARMONIC_
+    GRID_LEVELS/HARMONIC_COMPOSITE_FLOOR/AMBIENT_PER_BAR_CAP below: EASY
+    keeps only the strongest downbeat per ambient bar, NORMAL adds beat-
+    level accents, HARD adds a capped handful of 8th-level accents and
+    NEVER mechanically fills 16ths there. A quiet passage is allowed to
+    stay quiet - "no note here" is an accepted, intended outcome, not a
+    coverage gap.
+  - Harmonic notes are always LOWER priority than kick/snare in a
+    concurrency conflict (see musical_priority()) - percussion is the
+    rhythmic backbone, harmonic notes are accents layered on top of it,
+    never the other way around.
   - Repeated rhythmic phrases (see analysis.json's bar pattern_id/bar_slot)
     get a CONSISTENT lane the first time a given (pattern, slot, kick-or-
     snare-or-other) combination is placed, and reuse that lane on every
-    later repeat of the same phrase (falling back to the normal
-    frequency-band pick only when the remembered lane is unavailable due
-    to spacing) - so a recurring drum figure maps to a recognizable finger
-    pattern instead of re-randomizing lanes every repetition. Lane choice
-    otherwise still follows the onset's dominant frequency band.
-  - There is no note-count or notes-per-second target. Each difficulty is
-    built from a QUALITY-based candidate pool (rhythmic role + a strength
-    floor), and note count is whatever survives that pool plus the
-    playability spacing rules - never a number to hit.
-  - Long sustained harmonic onsets (held vocal/instrument notes) become
-    hold notes instead of a burst of taps.
+    later repeat - so a recurring figure maps to a recognizable finger
+    pattern instead of re-randomizing lanes every repetition.
+  - There is no note-count or notes-per-second target for either source.
+    Each difficulty is built from a QUALITY-based candidate pool, and note
+    count is whatever survives that pool plus the playability spacing
+    rules - never a number to hit.
+  - Long sustained harmonic phrases become hold notes instead of a burst
+    of taps.
   - Chords (two simultaneous lanes) are reserved for strong downbeats in
     high-energy sections and are rationed per difficulty.
   - No note is ever placed after the song's usable end (outro buffer).
   - HOLD/tap concurrency rules (ALLOWED_HOLD_TAP_COMBOS) are applied LAST,
-    exactly as before - the rhythm redesign above only changes WHICH
-    onsets become candidate notes and WHEN/WHERE they land, never how
-    concurrent input is capped.
+    exactly as before - none of the above changes how concurrent input is
+    capped.
 """
 import sys
 import json
@@ -179,11 +194,13 @@ def snap_tolerances(bpm):
 
 
 def onset_time_for_chart(o, tolerances):
-    """The TIME this onset's note is actually placed at: the exact grid
-    time if the onset is close enough to be measurement jitter around a hit
-    that WAS played on the grid, otherwise the onset's own raw detected
-    time. Never touches o["time"] itself - that stays the raw measurement
-    for provenance/offset-diagnostics."""
+    """The TIME this PERCUSSIVE onset's note is actually placed at: the
+    exact grid time if the onset is close enough to be measurement jitter
+    around a hit that WAS played on the grid, otherwise the onset's own raw
+    detected time. Never touches o["time"] itself - that stays the raw
+    measurement for provenance/offset-diagnostics. Harmonic candidates
+    don't go through this - analysis.json's harmonic_phrases[].time is
+    already fully resolved by resolve_phrase_anchor()."""
     gc = o.get("grid_class", "off_grid")
     if gc == "off_grid":
         return o["time"]
@@ -193,57 +210,118 @@ def onset_time_for_chart(o, tolerances):
     return o["time"]
 
 
+# Which grid levels a HARMONIC candidate is eligible at, split by whether
+# its bar is ambient - ambient bars get a visibly thinner harmonic layer at
+# every difficulty (see the module docstring); 16th-level harmonic
+# candidates are never eligible in an ambient bar at any difficulty ("no
+# mechanical 16th filling" in a quiet passage).
+AMBIENT_HARMONIC_GRID_LEVELS = {
+    "easy": {"downbeat"},
+    "normal": {"downbeat", "beat"},
+    "hard": {"downbeat", "beat", "8th"},
+}
+NORMAL_REGION_HARMONIC_GRID_LEVELS = {
+    "easy": {"downbeat", "beat"},
+    "normal": {"downbeat", "beat", "8th"},
+    "hard": {"downbeat", "beat", "8th", "16th", "off_grid"},
+}
+# A harmonic candidate's own composite_score (see resolve_phrase_anchor in
+# analyze_audio.py - grid alignment + local energy + phrase presence, NOT
+# just onset strength) must clear this floor to be eligible. Ambient bars
+# use a HIGHER floor than non-ambient ones at every difficulty - a quiet
+# passage should only ever surface its most unmistakably present moments.
+HARMONIC_COMPOSITE_FLOOR = {
+    "easy": {"ambient": 0.55, "normal_region": 0.50},
+    "normal": {"ambient": 0.48, "normal_region": 0.42},
+    "hard": {"ambient": 0.45, "normal_region": 0.35},
+}
+# Hard per-bar cap on ambient-bar harmonic candidates for EASY/HARD (ties
+# to "downbeat-only skeleton" / "a capped handful of 8th accents" - NORMAL
+# has no explicit cap since the beat grid's own 4-per-bar ceiling already
+# keeps it sparse).
+AMBIENT_PER_BAR_CAP = {"easy": 1, "hard": 2}
+
+
+def qualifies_percussive(layer, o, sections, thresholds):
+    gc = o["grid_class"]
+    cat = o["category"]
+    strong = o["strength"] >= thresholds["strong"]
+    medium = o["strength"] >= thresholds["medium"]
+    floor_ok = o["strength"] >= thresholds["floor"]
+
+    if layer == "easy":
+        # The song's rhythmic skeleton: kicks/snares that land squarely on
+        # a downbeat or beat - EASY alone should still let you feel the
+        # song's basic pulse, not just "fewer random hits".
+        return (cat == "kick" and gc in ("downbeat", "beat")) or (cat == "snare" and gc in ("downbeat", "beat"))
+    if layer == "normal":
+        # EASY's skeleton plus the 8th-note groove layer (the classic
+        # "and"-of-the-beat kick/snare pattern) and chorus/climax section
+        # accents from other percussive hits.
+        return (
+            (cat in ("kick", "snare") and gc == "8th")
+            or (cat == "perc_other" and gc in ("beat", "8th") and strong and section_at(o["time"], sections) in HIGH_ENERGY_SECTIONS)
+        )
+    # hard
+    if not floor_ok:
+        return False
+    # Meaningful 16th-note fills/detail, PLUS deliberately off-grid
+    # kick/snare hits (real syncopation) - never every remaining weak
+    # onset, still gated by a category/strength floor.
+    return (
+        (cat in ("kick", "snare") and gc == "16th")
+        or (cat in ("kick", "snare") and gc == "off_grid" and medium)
+        or (cat == "perc_other" and gc in ("beat", "8th", "16th") and strong)
+    )
+
+
+def qualifies_harmonic(layer, o):
+    gc = o["grid_class"]
+    region = "ambient" if o["is_ambient"] else "normal_region"
+    levels = (AMBIENT_HARMONIC_GRID_LEVELS if o["is_ambient"] else NORMAL_REGION_HARMONIC_GRID_LEVELS)[layer]
+    if gc == "off_grid" and layer != "hard":
+        return False  # off-grid harmonic accents only ever appear at HARD
+    if gc not in levels:
+        return False
+    return o["composite_score"] >= HARMONIC_COMPOSITE_FLOOR[layer][region]
+
+
+def apply_ambient_harmonic_cap(layer, onsets, pool):
+    cap = AMBIENT_PER_BAR_CAP.get(layer)
+    if not cap:
+        return pool
+    by_bar = {}
+    for i in pool:
+        o = onsets[i]
+        if o["category"] == "harmonic" and o["is_ambient"]:
+            by_bar.setdefault(o["bar_index"], []).append(i)
+    drop = set()
+    for idxs in by_bar.values():
+        if len(idxs) > cap:
+            ranked = sorted(idxs, key=lambda i: -onsets[i]["composite_score"])
+            drop.update(ranked[cap:])
+    return [i for i in pool if i not in drop]
+
+
 def build_candidate_pool(layer, onsets, used, sections, thresholds):
-    """Onsets eligible to be ADDED at this layer, keyed by RHYTHMIC ROLE
-    (grid position + musical category) and a strength floor - never by
-    picking "the next N strongest" onsets, and never just "this onset
-    exists". Already-used onset indices (placed in a lower layer) are
-    excluded so a higher layer only ever adds NEW notes on top."""
+    """Onsets eligible to be ADDED at this layer. Percussive entries are
+    keyed by RHYTHMIC ROLE (grid position + musical category), never by
+    picking "the next N strongest" onsets. Harmonic entries (already
+    phrase-resolved in analyze_audio.py) are keyed by grid level + their
+    own composite musical-naturalness score, with ambient bars held to a
+    visibly stricter standard. Already-used indices (placed in a lower
+    layer) are excluded so a higher layer only ever adds NEW notes on top."""
     pool = []
     for i, o in enumerate(onsets):
         if i in used:
             continue
-        gc = o["grid_class"]
-        cat = o["category"]
-        strong = o["strength"] >= thresholds["strong"]
-        medium = o["strength"] >= thresholds["medium"]
-        floor_ok = o["strength"] >= thresholds["floor"]
-
-        if layer == "easy":
-            # The song's rhythmic skeleton: kicks/snares that land squarely
-            # on a downbeat or beat, or an unmistakably strong, beat-
-            # aligned phrase entrance - so EASY alone still lets you feel
-            # the song's basic pulse, not just "fewer random hits".
-            qualifies = (
-                (cat == "kick" and gc in ("downbeat", "beat"))
-                or (cat == "snare" and gc in ("downbeat", "beat"))
-                or (o["phrase_start"] and gc in ("downbeat", "beat") and strong)
-            )
-        elif layer == "normal":
-            # EASY's skeleton plus the 8th-note groove layer (the classic
-            # "and"-of-the-beat kick/snare pattern), secondary vocal/
-            # melody rhythmic accents, and chorus/climax section accents.
-            qualifies = (
-                (cat in ("kick", "snare") and gc == "8th")
-                or (o["phrase_start"] and gc in ("downbeat", "beat", "8th") and medium)
-                or (gc in ("beat", "8th") and strong and section_at(o["time"], sections) in HIGH_ENERGY_SECTIONS)
-            )
-        else:  # hard
-            if not floor_ok:
-                continue
-            # Meaningful 16th-note fills/detail, PLUS deliberately
-            # off-grid kick/snare hits (real syncopation, a food-forward
-            # attack) - never every remaining weak onset. Still gated by a
-            # category/strength floor, not "everything that's left".
-            qualifies = (
-                (cat in ("kick", "snare") and gc == "16th")
-                or (cat in ("kick", "snare") and gc == "off_grid" and medium)
-                or (o["phrase_start"] and medium)
-                or (cat == "perc_other" and gc in ("beat", "8th", "16th") and strong)
-            )
+        if o["category"] == "harmonic":
+            qualifies = qualifies_harmonic(layer, o)
+        else:
+            qualifies = qualifies_percussive(layer, o, sections, thresholds)
         if qualifies:
             pool.append(i)
-    return pool
+    return apply_ambient_harmonic_cap(layer, onsets, pool)
 
 
 # Priority order for resolving a 3+-lane conflict (see enforce_concurrency_
@@ -258,14 +336,20 @@ _PRIORITY_AUXILIARY = 1
 
 
 def musical_priority(onset, thresholds):
-    """Higher = more musically important = wins a 3+-lane conflict."""
+    """Higher = more musically important = wins a 3+-lane conflict.
+    Percussion is always the rhythmic backbone: kick/snare outrank every
+    harmonic candidate unconditionally, so a harmonic accent can never
+    bump a kick/snare hit out of the chart, only fill the space around
+    it."""
     if onset is None:
         return _PRIORITY_CHORD_SYNTHETIC
     if onset["category"] == "kick":
         return 5 if onset["grid_class"] == "downbeat" else 4.5
     if onset["category"] == "snare":
         return 4
-    if onset["phrase_start"]:
+    if onset["category"] == "harmonic":
+        return 2.5 if onset["grid_class"] == "downbeat" else 2.0
+    if onset.get("phrase_start"):
         return 3
     if onset["strength"] >= thresholds["strong"]:
         return 2
@@ -544,22 +628,65 @@ def build_layer(layer, prev_notes, prev_note_onset_ids, onsets, used, sections,
     return notes_sorted, ids_sorted, new_used, dropped
 
 
+def wrap_harmonic_candidate(p):
+    """Adapts one already phrase-resolved analysis.json harmonic_phrases[]
+    entry into the same onset-shaped dict build_layer()'s generic timeline
+    machinery expects, so percussive onsets and harmonic candidates can
+    share one unified candidate list/index space. `time` is already fully
+    resolved (grid-snapped, or a deliberately kept off-grid moment) by
+    resolve_phrase_anchor() - no further quantization happens here."""
+    return {
+        "time": p["time"],
+        "_chart_time": p["time"],
+        "band": p["band"],
+        "category": "harmonic",
+        "grid_class": p["grid_class"],
+        "sustain": p["sustain"],
+        "source": "harm",
+        "phrase_start": False,
+        "strength": p["composite_score"],
+        "composite_score": p["composite_score"],
+        "pattern_id": p["pattern_id"],
+        "bar_index": p["bar_index"],
+        "bar_slot": p["bar_slot"],
+        "is_ambient": p["is_ambient"],
+    }
+
+
 def generate_all_difficulties(analysis, base_seed):
     duration = analysis["duration_sec"]
     usable_end = duration - OUTRO_BUFFER_SEC
-    onsets = [o for o in analysis["onsets"] if o["time"] < usable_end]
+    # Percussive candidates: real attacks, still selected/quantized by
+    # their own onset time (see qualifies_percussive/onset_time_for_chart).
+    # Harmonic-category raw onsets are EXCLUDED here - they're superseded
+    # entirely by the phrase-resolved harmonic_phrases below.
+    percussive_onsets = [
+        o for o in analysis["onsets"]
+        if o["time"] < usable_end and o["category"] in ("kick", "snare", "perc_other")
+    ]
     sections = analysis["sections"]
 
     tolerances = snap_tolerances(analysis["bpm"])
-    for o in onsets:
+    for o in percussive_onsets:
         o["_chart_time"] = onset_time_for_chart(o, tolerances)
 
-    strengths = [o["strength"] for o in onsets]
+    # Percentile thresholds are computed from PERCUSSIVE onset strength
+    # only - harmonic candidates are gated by their own composite_score
+    # scale instead (see HARMONIC_COMPOSITE_FLOOR), which measures
+    # something different (grid alignment + phrase presence, not raw
+    # onset strength) and would skew this distribution if mixed in.
+    strengths = [o["strength"] for o in percussive_onsets]
     thresholds = {
         "strong": percentile(strengths, 75),
         "medium": percentile(strengths, 55),
         "floor": percentile(strengths, 30),
     }
+
+    harmonic_candidates = [
+        wrap_harmonic_candidate(p) for p in analysis.get("harmonic_phrases", [])
+        if p["time"] < usable_end
+    ]
+    onsets = percussive_onsets + harmonic_candidates
 
     used = set()
     notes, ids = [], []

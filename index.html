@@ -23,10 +23,18 @@
        and never removed from the DOM. -->
   <div id="menu-bg-layer" class="menu-bg-layer active" aria-hidden="true">
     <div id="title-bg"></div>
-    <video id="title-bg-video" class="title-bg-video" src="assets/video/title-loop.mp4" autoplay muted loop playsinline webkit-playsinline="true" preload="auto"></video>
+    <video id="title-bg-video" class="title-bg-video" src="assets/video/opening-loop.mov" autoplay muted loop playsinline webkit-playsinline="true" preload="auto" disablepictureinpicture disableremoteplayback x-webkit-airplay="deny"></video>
     <div id="title-dim"></div>
   </div>
 
+  <!-- OPENING STEP 1/2: the logo/GAME START button live OUTSIDE the video
+       itself and are pure DOM/CSS - no native video controls of any kind
+       are ever attached to #title-bg-video (no `controls` attribute), so
+       there is nothing for iOS Safari to draw a native play button over.
+       #screen-title starts WITHOUT the .step2 class (STEP 1: video + TAP
+       TO START only, no logo) - js/main.js adds .step2 on the first tap,
+       which is what fades the logo in and swaps the button label to GAME
+       START via CSS (see .title-main / .tap-to-start rules). -->
   <section id="screen-title" class="screen active">
     <button id="btn-start" class="title-tap-target">
       <h1 class="title-main">
@@ -36,7 +44,36 @@
       </h1>
       <span class="tap-to-start">TAP TO START</span>
     </button>
+
+    <!-- DEV-ONLY, TEMPORARY: OPENING A/B background video comparison
+         switch - see js/openingAB.js. A sibling of #btn-start (not a
+         descendant), so tapping it never also triggers TAP TO START/GAME
+         START. To remove this feature once a final video is chosen:
+         delete this block, delete js/openingAB.js, delete its import +
+         one setupOpeningAB(...) call in js/main.js, delete the
+         ".opening-ab-*" rules in css/style.css. -->
+    <div id="opening-ab-switch" class="opening-ab-switch">
+      <button type="button" class="opening-ab-btn" data-opening="A">OPENING A</button>
+      <button type="button" class="opening-ab-btn" data-opening="B">OPENING B</button>
+    </div>
   </section>
+
+  <!-- Loading overlay for the OPENING background video only - shown just
+       long enough to cover a slow initial load (see js/main.js's
+       watchOpeningVideoLoading()), never a fixed timer. Progress is
+       derived only from real signals the video element exposes
+       (readyState tiers + video.buffered vs video.duration); it never
+       claims 100% before the video has actually confirmed it can render a
+       frame. -->
+  <div id="title-loading-overlay" class="hidden" aria-hidden="true">
+    <div class="title-loading-panel">
+      <div class="title-loading-label">Loading...</div>
+      <div class="title-loading-bar-track">
+        <div id="title-loading-bar-fill" class="title-loading-bar-fill"></div>
+      </div>
+      <div id="title-loading-pct" class="title-loading-pct">0%</div>
+    </div>
+  </div>
 
   <section id="screen-songlist" class="screen">
     <div id="songlist-bg" aria-hidden="true"></div>

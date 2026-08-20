@@ -1,0 +1,20 @@
+{
+  "id": "devil-in-the-fire",
+  "title": "DEVIL IN THE FIRE",
+  "artist": "",
+  "bpm": 132.512,
+  "offsetSec": 0.0,
+  "durationSec": 134.52,
+  "audio": "audio.mp3",
+  "artistUrl": "https://www.tunecore.co.jp/artists?id=1140292&utm_source=threads&utm_medium=social&utm_content=link_in_bio",
+  "noteTheme": "devil-in-the-fire",
+  "background": {
+    "type": "video",
+    "src": "https://pub-fe2b7ec648804636bd6e616bd4ffe4e2.r2.dev/copy_632B68CA-944E-4465-9F4B-60786ED01DB4.mov"
+  },
+  "difficulties": {
+    "EASY": "charts/easy.json",
+    "NORMAL": "charts/normal.json",
+    "HARD": "charts/hard.json"
+  }
+}

@@ -32,6 +32,46 @@ const HIT_EFFECT_BY_GRADE = {
   GOOD: { flareSec: 0.18, ringSec: 0.16, ring2Sec: 0, sparkleSec: 0.24, sparkleCount: 4, emberCount: 0, glow: 0.45, flashSec: 0 },
 };
 
+// ---------- Per-song note themes ----------
+// Selected via manifest.noteTheme (see Renderer.setNoteTheme(), called
+// from js/main.js once the current song's manifest is known) - NOT a
+// per-song-name branch in the drawing code itself. "default" is the
+// original drawn V-shaped crystal shard used everywhere until now
+// (Nijiiro Eden and every song without its own theme); its hitColors
+// below are copied byte-for-byte from what _drawHitEffects/_drawSparkle
+// Burst/_drawEmbers already hardcoded, so the default theme's visuals are
+// pixel-identical to before this system existed. A theme with a
+// `tapImageSrc` swaps ONLY the falling regular-tap-note artwork for that
+// image (via Canvas drawImage - scale/opacity/glow only, never a redrawn
+// shape) - HOLD heads/bodies/tails and the judge pads are never themed,
+// so a HOLD is always unambiguously a HOLD regardless of song.
+const NOTE_THEMES = {
+  default: {
+    tapImageSrc: null,
+    hitColors: {
+      flareCore: "rgba(235,255,248,",
+      flareMid: "rgba(190,255,225,",
+      ring: "rgba(205,255,232,0.9)",
+      ring2: "rgba(220,255,240,0.85)",
+      ringShadow: "rgba(180,255,220,0.8)",
+      sparkle: ["rgba(255,255,255,0.95)", "rgba(200,230,255,0.9)", "rgba(190,255,220,0.85)"],
+      ember: ["rgba(215,255,235,0.9)", "rgba(200,225,255,0.9)"],
+    },
+  },
+  "devil-in-the-fire": {
+    tapImageSrc: "assets/notes/devil-in-the-fire-flame.png",
+    hitColors: {
+      flareCore: "rgba(235,248,255,",
+      flareMid: "rgba(140,205,255,",
+      ring: "rgba(150,210,255,0.9)",
+      ring2: "rgba(190,230,255,0.85)",
+      ringShadow: "rgba(110,190,255,0.85)",
+      sparkle: ["rgba(255,255,255,0.95)", "rgba(140,200,255,0.9)", "rgba(80,165,255,0.85)"],
+      ember: ["rgba(160,220,255,0.9)", "rgba(90,175,255,0.9)"],
+    },
+  },
+};
+
 // Builds the path for ONE slender crystal blade - side -1 is the left
 // blade, +1 is the right. Each blade is its own thin, tapered shard
 // (pointed at both ends, bulging slightly in the middle) leaning inward
@@ -67,6 +107,23 @@ export class Renderer {
     // Short-lived success flashes triggered by triggerHitEffect(); each
     // entry is { lane, grade, startTime, cfg }, pruned once fully faded.
     this.hitEffects = [];
+
+    this.theme = NOTE_THEMES.default;
+    this._themeImages = {};
+  }
+
+  /** Selects the drawing theme for regular tap notes + success-hit colors
+   * (see NOTE_THEMES) - called from js/main.js with the current song's
+   * manifest.noteTheme once a song is chosen. Unknown/missing theme names
+   * fall back to "default" (the original crystal shard), never throw. */
+  setNoteTheme(name) {
+    const theme = NOTE_THEMES[name] || NOTE_THEMES.default;
+    this.theme = theme;
+    if (theme.tapImageSrc && !this._themeImages[theme.tapImageSrc]) {
+      const img = new Image();
+      img.src = theme.tapImageSrc;
+      this._themeImages[theme.tapImageSrc] = img;
+    }
   }
 
   /** Called right after a tap note is judged (grade !== null && !== "MISS"). */
@@ -432,6 +489,16 @@ export class Renderer {
   // as the note nears the judge line. Nothing here is an image; every
   // pixel is path/gradient/stroke.
   _drawCrystalNote(x, y, note, currentTime) {
+    if (this.theme.tapImageSrc) {
+      const img = this._themeImages[this.theme.tapImageSrc];
+      if (img && img.complete && img.naturalWidth) {
+        this._drawThemedImageNote(x, y, note, currentTime, img);
+        return;
+      }
+      // Still loading (or failed) - fall through to the default drawn
+      // shard below rather than showing nothing for a frame.
+    }
+
     const ctx = this.ctx;
     const cx = x + this.laneWidth / 2;
     const cy = y;
@@ -512,6 +579,59 @@ export class Renderer {
     ctx.restore();
   }
 
+  // Themed falling tap-note visual for songs with a manifest.noteTheme
+  // that sets tapImageSrc (currently DEVIL IN THE FIRE's attached blue-
+  // flame PNG) - the attached artwork itself, drawn via Canvas drawImage
+  // with only deterministic scale/opacity/glow, never redrawn or
+  // regenerated. Deliberately quieter than the default crystal (no V-
+  // shaped echo trail, no arc flicker): "本体 + 弱いグロー + 控えめな残
+  // 光", brightening a little as it nears the judge line - the flame must
+  // never grow large enough to dominate the frame or hide the background
+  // video. HOLD heads are NOT themed (see _drawHoldNote/_drawShardCore) -
+  // only the plain tap note - so a HOLD's ribbon body/tail keep it
+  // unambiguously a HOLD regardless of song.
+  _drawThemedImageNote(x, y, note, currentTime, img) {
+    const ctx = this.ctx;
+    const cx = x + this.laneWidth / 2;
+    const cy = y;
+    const boost = this._proximityBoost(cy);
+    const w = this.laneWidth * NOTE_W_RATIO;
+    const aspect = img.naturalHeight / (img.naturalWidth || 1);
+    const h = w * aspect;
+
+    ctx.save();
+
+    // soft halo behind the flame, brightening on approach - same "how
+    // close am I" cue the default theme uses, recolored blue-white
+    const haloR = w * (0.55 + boost * 0.3);
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
+    halo.addColorStop(0, `rgba(120,195,255,${0.18 + boost * 0.2})`);
+    halo.addColorStop(1, "rgba(120,195,255,0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // restrained afterglow - 2 faint, smaller copies trailing upward
+    // ("控えめな残光"), never a busy multi-echo trail
+    for (let i = 0; i < 2; i++) {
+      const echoScale = 0.8 - i * 0.16;
+      const echoY = cy - h * (0.5 + i * 0.42);
+      ctx.globalAlpha = (0.13 - i * 0.05) * (0.5 + boost * 0.5);
+      ctx.drawImage(img, cx - (w * echoScale) / 2, echoY - (h * echoScale) / 2, w * echoScale, h * echoScale);
+    }
+    ctx.globalAlpha = 1;
+
+    // the flame itself - glow increases only near the judge line, mirroring
+    // the default theme's own shadowBlur-ramps-on-approach behaviour
+    ctx.shadowColor = "rgba(110,190,255,0.7)";
+    ctx.shadowBlur = 4 + boost * 9;
+    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+    ctx.shadowBlur = 0;
+
+    ctx.restore();
+  }
+
   // Success flashes: the green icon briefly replaces the blue one at the
   // judge line, with a short white flash + star/cross sparkle burst around
   // it. Strength (icon hold time, sparkle count, glow) scales with grade.
@@ -531,14 +651,16 @@ export class Renderer {
       const cx = fx.lane * this.laneWidth + this.laneWidth / 2;
       const cy = this.judgeY;
 
+      const hc = this.theme.hitColors;
+
       if (elapsed <= fx.cfg.flareSec) {
         const t = elapsed / fx.cfg.flareSec;
         const r = this.laneWidth * (0.24 - t * 0.06);
         ctx.save();
         const flareGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-        flareGrad.addColorStop(0, `rgba(235,255,248,${(1 - t) * 0.9})`);
-        flareGrad.addColorStop(0.5, `rgba(190,255,225,${(1 - t) * 0.55 * fx.cfg.glow})`);
-        flareGrad.addColorStop(1, "rgba(190,255,225,0)");
+        flareGrad.addColorStop(0, `${hc.flareCore}${(1 - t) * 0.9})`);
+        flareGrad.addColorStop(0.5, `${hc.flareMid}${(1 - t) * 0.55 * fx.cfg.glow})`);
+        flareGrad.addColorStop(1, `${hc.flareMid}0)`);
         ctx.fillStyle = flareGrad;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -551,9 +673,9 @@ export class Renderer {
         ctx.save();
         const r = this.laneWidth * 0.2 + t * this.laneWidth * 0.5;
         ctx.globalAlpha = (1 - t) * 0.75;
-        ctx.strokeStyle = "rgba(205,255,232,0.9)";
+        ctx.strokeStyle = hc.ring;
         ctx.lineWidth = 2.2 * (1 - t) + 0.5;
-        ctx.shadowColor = "rgba(180,255,220,0.8)";
+        ctx.shadowColor = hc.ringShadow;
         ctx.shadowBlur = 6 * fx.cfg.glow;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -569,7 +691,7 @@ export class Renderer {
         ctx.save();
         const r = this.laneWidth * 0.32 + t * this.laneWidth * 0.85;
         ctx.globalAlpha = (1 - t) * 0.4;
-        ctx.strokeStyle = "rgba(220,255,240,0.85)";
+        ctx.strokeStyle = hc.ring2;
         ctx.lineWidth = 1.4 * (1 - t) + 0.4;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -611,7 +733,7 @@ export class Renderer {
     const ctx = this.ctx;
     const spread = 6 + progress * 30;
     const fade = 1 - progress;
-    const colors = ["rgba(255,255,255,0.95)", "rgba(200,230,255,0.9)", "rgba(190,255,220,0.85)"];
+    const colors = this.theme.hitColors.sparkle;
     ctx.save();
     for (let i = 0; i < count; i++) {
       const angle = (Math.PI * 2 * i) / count + progress * 1.6;
@@ -653,7 +775,7 @@ export class Renderer {
       const py = cy - progress * (18 + (i % 3) * 6) - Math.abs(side) * dist * 0.3;
       const r = 1.0 + (i % 2) * 0.7;
       ctx.globalAlpha = fade * 0.85;
-      ctx.fillStyle = i % 2 === 0 ? "rgba(215,255,235,0.9)" : "rgba(200,225,255,0.9)";
+      ctx.fillStyle = this.theme.hitColors.ember[i % 2];
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();

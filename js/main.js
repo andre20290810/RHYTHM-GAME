@@ -4,6 +4,7 @@ import { RhythmGame } from "./game.js";
 import { Renderer } from "./renderer.js";
 import { InputController } from "./input.js";
 import { DebugPanel } from "./debugPanel.js";
+import { setupOpeningAB } from "./openingAB.js";
 
 const screens = {
   title: document.getElementById("screen-title"),
@@ -59,6 +60,109 @@ function playTitleBgVideo() {
       else titleBgVideo.addEventListener("canplay", retry, { once: true });
     });
   }
+}
+
+// ---------- OPENING loading overlay ----------
+// Covers STEP 1 only for as long as the background video genuinely isn't
+// ready to render a frame yet - never a fixed timer, never a fabricated
+// percentage. Progress comes only from real signals the video element
+// itself exposes: readyState's tier (HAVE_NOTHING..HAVE_ENOUGH_DATA) plus,
+// once duration is known, how much of the file is actually buffered.
+const titleLoadingOverlay = document.getElementById("title-loading-overlay");
+const titleLoadingBarFill = document.getElementById("title-loading-bar-fill");
+const titleLoadingPct = document.getElementById("title-loading-pct");
+
+// Coarse floor per readyState tier - matches how the rest of this file
+// already treats readyState>=2 (HAVE_CURRENT_DATA) as "can actually paint
+// a frame now" (see isVideoActive()/beginPlayTransition() for the per-song
+// background video's identical bar).
+const READY_STATE_PROGRESS = [0, 20, 45, 70, 92];
+
+function computeOpeningVideoProgress() {
+  const rs = titleBgVideo.readyState;
+  let pct = READY_STATE_PROGRESS[Math.min(rs, READY_STATE_PROGRESS.length - 1)];
+  if (Number.isFinite(titleBgVideo.duration) && titleBgVideo.duration > 0 && titleBgVideo.buffered.length > 0) {
+    const bufferedEnd = titleBgVideo.buffered.end(titleBgVideo.buffered.length - 1);
+    const bufferedFrac = Math.min(1, bufferedEnd / titleBgVideo.duration);
+    pct = Math.max(pct, Math.round(bufferedFrac * 92));
+  }
+  return pct;
+}
+
+function updateOpeningLoadingUI() {
+  const pct = computeOpeningVideoProgress();
+  titleLoadingBarFill.style.width = `${pct}%`;
+  titleLoadingPct.textContent = `${pct}%`;
+}
+
+function isOpeningVideoReady() {
+  return titleBgVideo.readyState >= 2; // HAVE_CURRENT_DATA - can paint a frame
+}
+
+let openingLoadingResolved = false;
+let openingLoadingPollId = null;
+
+// Only ever called once real readiness is confirmed (loadeddata/canplay),
+// a genuine load error (nothing more to wait for), or the same kind of
+// far-longer-than-normal emergency fallback the per-song background video
+// already uses elsewhere in this file - "still loading" is never treated
+// as "broken", but a truly stuck load must not block STEP 1 forever.
+function finishOpeningLoading() {
+  if (openingLoadingResolved) return;
+  openingLoadingResolved = true;
+  if (openingLoadingPollId) {
+    clearInterval(openingLoadingPollId);
+    openingLoadingPollId = null;
+  }
+  titleLoadingBarFill.style.width = "100%";
+  titleLoadingPct.textContent = "100%";
+  if (!titleLoadingOverlay.classList.contains("hidden")) {
+    titleLoadingOverlay.classList.add("fading");
+    setTimeout(() => titleLoadingOverlay.classList.add("hidden"), 550);
+  }
+}
+
+function watchOpeningVideoLoading() {
+  if (isOpeningVideoReady()) return; // already ready - the overlay never even shows
+
+  // Brief grace period before actually revealing the overlay, so a
+  // normally-fast load never flashes a 0% Loading UI for a single frame -
+  // only a genuinely slow load ever becomes visible.
+  const graceTimer = setTimeout(() => {
+    if (openingLoadingResolved) return;
+    titleLoadingOverlay.classList.remove("hidden", "fading");
+    updateOpeningLoadingUI();
+    openingLoadingPollId = setInterval(updateOpeningLoadingUI, 150);
+  }, 200);
+
+  const onSettled = () => {
+    clearTimeout(graceTimer);
+    finishOpeningLoading();
+  };
+  titleBgVideo.addEventListener("loadeddata", onSettled, { once: true });
+  titleBgVideo.addEventListener("canplay", onSettled, { once: true });
+  titleBgVideo.addEventListener("error", onSettled, { once: true });
+  setTimeout(onSettled, EMERGENCY_FALLBACK_MS);
+}
+
+// Re-runs the exact same real-signal-only loading watch above for a newly
+// assigned video src - used only by the OPENING A/B dev switch (see
+// js/openingAB.js) when the user picks the other candidate video. Resets
+// the one-shot "already resolved" guard and the overlay's visible state
+// back to their initial values, then delegates straight to
+// watchOpeningVideoLoading() so the grace-period/fast-load-skip/
+// percentage-from-readyState logic is never duplicated.
+function restartOpeningVideoLoading() {
+  openingLoadingResolved = false;
+  if (openingLoadingPollId) {
+    clearInterval(openingLoadingPollId);
+    openingLoadingPollId = null;
+  }
+  titleLoadingOverlay.classList.add("hidden");
+  titleLoadingOverlay.classList.remove("fading");
+  titleLoadingBarFill.style.width = "0%";
+  titleLoadingPct.textContent = "0%";
+  watchOpeningVideoLoading();
 }
 
 // ---------- TITLE/menu BGM ----------
@@ -243,6 +347,11 @@ function renderSongList(entries) {
 async function selectSong(entry) {
   try {
     currentManifest = await loadManifest(entry);
+    // Select this song's note visual theme now (falls back to "default"
+    // for songs without their own noteTheme) - done once per song select,
+    // well before any note is ever drawn, so gameplay never has to branch
+    // on the song id itself (see renderer.js's NOTE_THEMES).
+    renderer.setNoteTheme(currentManifest.noteTheme);
     // Start buffering immediately (no gesture required just to load bytes -
     // only the later .play() call in startGame() needs to be inside a tap
     // handler).
@@ -276,6 +385,8 @@ async function init() {
   // autoplay doesn't need a user gesture, so this can start right away
   // rather than waiting for the first tap.
   showScreen("title");
+  watchOpeningVideoLoading();
+  setupOpeningAB({ restartOpeningVideoLoading, playTitleBgVideo, resetTitleToStep1 });
 
   input = new InputController(touchZones, {
     onLaneDown: (lane) => handleLaneDown(lane),
@@ -283,11 +394,45 @@ async function init() {
   });
 }
 
+// ---------- OPENING STEP 1 -> STEP 2 ----------
+// STEP 1 (page load): background video + TAP TO START only, no logo -
+// #screen-title starts WITHOUT the .step2 class (see css/style.css).
+// The first tap reveals the logo and relabels the button GAME START but
+// does NOT navigate anywhere yet; only a SECOND tap (now reading GAME
+// START) proceeds to the song list. Once reached, STEP 2 persists for the
+// rest of the session - returning to TITLE from elsewhere (song list's
+// 戻る, the difficulty screen's 戻る) always lands back in STEP 2, never
+// all the way back to the bare STEP 1 view.
+let titleStep2Reached = false;
+const tapToStartEl = document.querySelector(".tap-to-start");
+
+function revealTitleStep2() {
+  titleStep2Reached = true;
+  screens.title.classList.add("step2");
+  tapToStartEl.textContent = "GAME START";
+}
+
+// Used only by the OPENING A/B dev switch (js/openingAB.js) to return
+// TITLE to a clean STEP 1 baseline - background video + TAP TO START
+// only, logo hidden, TITLE BGM stopped - so both candidate videos are
+// always compared from the same starting state. Never called from any
+// normal (non-A/B) gameplay flow.
+function resetTitleToStep1() {
+  titleStep2Reached = false;
+  screens.title.classList.remove("step2");
+  tapToStartEl.textContent = "TAP TO START";
+  stopTitleBgm();
+}
+
 document.getElementById("btn-start").addEventListener("click", () => {
-  // Start the TITLE BGM synchronously, inside this real gesture, exactly
-  // like audioEngine's own gesture-unlock pattern - must be the first
-  // thing this handler does, no `await` before it.
-  playTitleBgm();
+  if (!titleStep2Reached) {
+    // Start the TITLE BGM synchronously, inside this real gesture, exactly
+    // like audioEngine's own gesture-unlock pattern - must be the first
+    // thing done in this branch, no `await` before it.
+    playTitleBgm();
+    revealTitleStep2();
+    return;
+  }
   showScreen("songlist");
 });
 

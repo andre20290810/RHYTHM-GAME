@@ -10,6 +10,16 @@
 <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png" />
 <link rel="manifest" href="manifest.webmanifest" />
 <meta name="theme-color" content="#060814" />
+<!-- OPENING B ("Legend / Of / KIVA") title font only - a hard, angular,
+     geometric sci-fi/tactical face, deliberately distinct from OPENING A's
+     serif italic (Memories Of ALEXIA, unchanged - see css/style.css's
+     .title-line rules). Loaded from Google Fonts with font-display:swap;
+     if the network request fails, css/style.css's font-family fallback
+     stack (condensed/bold system sans) still reads as angular/hard rather
+     than falling back to the serif used elsewhere. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -151,6 +161,17 @@
         <button id="btn-resume" class="btn-veil">つづける</button>
         <button id="btn-quit" class="btn-text">やめる</button>
       </div>
+    </div>
+
+    <!-- Shared "BLACKOUT -> 3 -> 2 -> 1 -> GAME START" pre-game countdown,
+         common to every song (see js/main.js's runCountdown()/
+         beginPlayTransition()) - opaque, covers bg/lanes/HUD/notes
+         entirely, never a per-song element. #countdown-ready is the
+         optional, deliberately quiet "still loading" indicator shown only
+         if the background genuinely takes a while past the count. -->
+    <div id="countdown-overlay" class="countdown-overlay hidden">
+      <div id="countdown-number" class="countdown-number"></div>
+      <div id="countdown-ready" class="countdown-ready hidden">READY...</div>
     </div>
   </section>
 

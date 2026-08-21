@@ -11,6 +11,11 @@
 // file (and hardcode whichever OPENING won back into index.html/CSS). No
 // song-name/game-logic branching anywhere else in the codebase is touched
 // by this feature.
+// bgmSrc: each OPENING's own TITLE BGM track - two DISTINCT audio files,
+// never the shared assets/audio/title-bgm.mp3 (that file is now unused by
+// either OPENING; kept in place, not deleted). See getCurrentBgmSrc()
+// below for how js/main.js reads this without any "if opening === ..." of
+// its own.
 const OPENINGS = {
   A: {
     src: "assets/video/title-loop.mp4", // previous/existing TITLE background video (unchanged, not deleted)
@@ -18,6 +23,7 @@ const OPENINGS = {
     // by sampling frames) - plain `cover`, no extra zoom needed.
     zoomClass: null,
     titleLines: ["Memories", "Of", "ALEXIA"],
+    bgmSrc: "assets/audio/opening-a-bgm.mp3", // "Velvet Circuitry"
   },
   B: {
     src: "assets/video/opening-loop.mov", // newly added OPENING loop video
@@ -27,6 +33,7 @@ const OPENINGS = {
     // zooms in just enough to crop those bars out of view.
     zoomClass: "opening-zoom-b",
     titleLines: ["Legend", "Of", "KIVA"],
+    bgmSrc: "assets/audio/opening-b-bgm.mp3", // "CODE NAME: KILLVAPH"
   },
 };
 
@@ -44,15 +51,22 @@ const OPENINGS = {
 export function setupOpeningAB({ restartOpeningVideoLoading, playTitleBgVideo, resetTitleToStep1 }) {
   const videoEl = document.getElementById("title-bg-video");
   const switchEl = document.getElementById("opening-ab-switch");
+  const screenTitleEl = document.getElementById("screen-title");
   const titleLineEls = [
     document.querySelector(".title-line-1"),
     document.querySelector(".title-line-2"),
     document.querySelector(".title-line-3"),
   ];
-  if (!videoEl || !switchEl) return;
+  if (!videoEl || !switchEl) return { getCurrentBgmSrc: () => OPENINGS.A.bgmSrc };
 
   // Matches index.html's initial title-bg-video src (opening-loop.mov).
   let current = "B";
+
+  // js/main.js's playTitleBgm() calls this to find which BGM track the
+  // currently-selected OPENING wants (see OPENINGS[key].bgmSrc above) -
+  // the only thing it needs to know from this module, so it never has to
+  // branch on "A"/"B" itself.
+  const getCurrentBgmSrc = () => OPENINGS[current].bgmSrc;
 
   function updateButtons() {
     switchEl.querySelectorAll(".opening-ab-btn").forEach((btn) => {
@@ -60,15 +74,18 @@ export function setupOpeningAB({ restartOpeningVideoLoading, playTitleBgVideo, r
     });
   }
 
-  // Sets the STEP 2 brand title's text to the currently selected OPENING's
-  // titleLines. Safe to call any time (even while STEP 1/logo is hidden) -
-  // it only ever changes text content, never opacity/visibility, which
-  // stays governed entirely by #screen-title's existing .step2 CSS.
+  // Sets the STEP 2 brand title's text (and, via #screen-title's
+  // data-opening attribute, which font css/style.css applies - see the
+  // OPENING B title-font rules there) to the currently selected OPENING.
+  // Safe to call any time (even while STEP 1/logo is hidden) - it only
+  // ever changes text content/an attribute, never opacity/visibility,
+  // which stays governed entirely by #screen-title's existing .step2 CSS.
   function updateBrandTitle() {
     const lines = OPENINGS[current].titleLines;
     titleLineEls.forEach((el, i) => {
       if (el && lines[i] != null) el.textContent = lines[i];
     });
+    if (screenTitleEl) screenTitleEl.dataset.opening = current;
   }
 
   function selectOpening(key) {
@@ -114,4 +131,6 @@ export function setupOpeningAB({ restartOpeningVideoLoading, playTitleBgVideo, r
   // apply B's zoom class up front to match (selectOpening() only runs on
   // an actual switch, not on this initial matching state).
   videoEl.classList.toggle("opening-zoom-b", OPENINGS[current].zoomClass === "opening-zoom-b");
+
+  return { getCurrentBgmSrc };
 }

@@ -288,6 +288,34 @@ html, body {
   line-height: 1.08;
   font-weight: 500;
 }
+
+/* ---------- OPENING B title font ("Legend / Of / KIVA") ----------
+   #screen-title[data-opening] is set by js/openingAB.js (updateBrandTitle)
+   alongside the title text itself - never a song-name branch, just which
+   OPENING is currently selected. OPENING A is completely untouched (no
+   selector below matches it, so .title-line keeps its existing serif
+   italic/weight/spacing/gradient exactly as before - item 17). OPENING B
+   swaps to Orbitron (angular/geometric/all-caps sci-fi-tactical, see the
+   font link in index.html's <head>) and drops the italic serif styling;
+   the gradient/glow treatment itself (.title-line, unchanged) still
+   applies underneath so both openings share the same "lit from within"
+   quality even though the letterforms differ. KIVA (.title-line-3) gets
+   extra letter-spacing and weight so it reads especially hard/blocky. */
+#screen-title[data-opening="B"] .title-main {
+  font-family: "Orbitron", "Eurostile", "Arial Narrow", "Helvetica Neue", sans-serif;
+  font-style: normal;
+  font-weight: 700;
+}
+#screen-title[data-opening="B"] .title-line-1 {
+  letter-spacing: 0.08em;
+}
+#screen-title[data-opening="B"] .title-line-2 {
+  letter-spacing: 0.5em;
+}
+#screen-title[data-opening="B"] .title-line-3 {
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
 .tap-to-start {
   position: absolute;
   left: 50%;
@@ -864,7 +892,11 @@ html, body {
 #hud-judge {
   position: absolute;
   left: 50%;
-  top: calc(82% - 4.4rem);
+  /* ~86px above the judge line (within the requested 50-90px range) -
+     pushed toward the upper end of that range so it clears DEVIL IN THE
+     FIRE's tall 128px note art (which reaches well above the judge line
+     on approach) without sitting on top of the note body itself. */
+  top: calc(82% - 5.4rem);
   transform: translateX(-50%) scale(0.92);
   font-size: 1.1rem;
   font-weight: 300;
@@ -906,6 +938,80 @@ html, body {
   padding: calc(1rem + var(--safe-top)) calc(1rem + var(--safe-right)) calc(1rem + var(--safe-bottom)) calc(1rem + var(--safe-left));
 }
 .overlay.hidden { display: none; }
+
+/* ---------- Pre-game countdown: BLACKOUT -> 3 -> 2 -> 1 ----------
+   Three phases, all driven by js/main.js's runCountdown() (a single phase
+   state machine - p3 -> p2 -> p1 -> done):
+     PHASE "3": fully OPAQUE black (background: #000 below, no .translucent
+       class yet) - nothing behind it may show at all, not even a video
+       frozen on its first frame. Video-ready waiting, audio unlock, chart
+       load, and renderer prep all happen invisibly behind this.
+     PHASE "2": .translucent is added - background-color eases from solid
+       #000 to a dark scrim (rgba, matches this file's existing --bg-void-
+       based dim tones), at the SAME moment #screen-play gets "bg-ready"
+       (see the #bg-video/#bg-fallback/#bg-dim rules above) - so the
+       background video visibly starts playing, dimly, underneath "2".
+     PHASE "1": #screen-play gets "ui-ready" too (lanes/judge-pads/notes-
+       canvas/HUD fade in) - the countdown numeral keeps sitting on top of
+       all of it. This is also when the invisible virtual note pre-roll
+       (started slightly earlier, mid "2" - see PRE_ROLL_LEAD_INTO_PHASE2_SEC
+       in js/main.js) becomes visible: the player watches the first notes
+       already falling toward the judge line before "1" even disappears,
+       which is what lets real playback start with zero added wait once it
+       does (see runCountdown()'s own comment for the full design note).
+   Above every other #screen-play layer (bg/lanes/notes-canvas/judge-pads/
+   touch-zones/HUD, z-index 0-5, and #pause-overlay's 10), so it still
+   physically intercepts every touch until PHASE "1" ends. Still below
+   #landscape-overlay (999, fixed) so the portrait-lock safety net always
+   wins if both would otherwise show at once. */
+.countdown-overlay {
+  position: absolute; inset: 0;
+  z-index: 600;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.5s ease, background-color 0.4s ease;
+}
+.countdown-overlay.translucent {
+  background: rgba(4, 6, 16, 0.6);
+}
+.countdown-overlay.hidden { display: none; }
+.countdown-overlay.fading { opacity: 0; pointer-events: none; }
+
+/* Silver-white-to-pale-blue, thin, simple, not oversized - a quiet count,
+   not a big flashy splash number. Text content itself ("3"/"2"/"1") is
+   set by js/main.js's runCountdown(); .show restarts the pop-then-hold-
+   then-fade animation on every step via the offsetWidth-reflow trick used
+   elsewhere in this file (see #hud-judge.show). */
+.countdown-number {
+  font-size: clamp(3.2rem, 18vw, 5.5rem);
+  font-weight: 200;
+  font-variant-numeric: tabular-nums;
+  color: var(--silver);
+  text-shadow: 0 0 16px rgba(190, 210, 255, 0.55), 0 0 34px rgba(150, 180, 255, 0.22);
+  opacity: 0;
+}
+.countdown-number.show {
+  animation: countdownStep 0.85s ease-out;
+}
+@keyframes countdownStep {
+  0% { opacity: 0; transform: scale(0.82); }
+  16% { opacity: 1; transform: scale(1.05); }
+  32% { transform: scale(1); }
+  78% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.96); }
+}
+.countdown-ready {
+  margin-top: 1.4rem;
+  font-size: 0.62rem;
+  font-weight: 300;
+  letter-spacing: 0.34em;
+  opacity: 0.4;
+  color: var(--ink);
+}
+.countdown-ready.hidden { display: none; }
 .overlay-panel h3 { margin: 0; letter-spacing: 0.14em; font-weight: 300; }
 .error-panel h3 { color: var(--miss-soft); }
 .error-panel p { opacity: 0.7; font-size: 0.82rem; max-width: 22rem; word-break: break-word; }

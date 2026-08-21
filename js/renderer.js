@@ -8,7 +8,14 @@ import { LANE_COUNT, NOTE_TRAVEL_SEC } from "./constants.js";
 // whatever the background video is doing underneath it.
 const NOTE_W_RATIO = 0.66; // shard width as a fraction of one lane's width
 const NOTE_ASPECT = 0.46; // height = width * this - keeps it "wide, not tall"
-const HOLD_RIBBON_W_RATIO = 0.4; // HOLD body width as a fraction of lane width - wide enough to read as a body, not a thin line
+// HOLD body width as a fraction of lane width. Deliberately narrow (was
+// 0.4) and kept center-hugging rather than wide - a HOLD's own visual
+// footprint must stay small enough that it never reads as "the same big
+// object" as a tap note in an adjacent lane, especially against DEVIL IN
+// THE FIRE's 128px-wide tap art, which is explicitly allowed to bleed past
+// its own lane boundary. Touch/judge zones are separate DOM elements sized
+// by CSS (#touch-zones), so narrowing this never changes hit detection.
+const HOLD_RIBBON_W_RATIO = 0.26;
 
 // Explicit per-note particle/echo budget so a busy HARD chart can't creep
 // this up over time - kept small and fixed regardless of chart density.
@@ -79,6 +86,16 @@ const NOTE_THEMES = {
     tapImageSrc: "assets/notes/devil-in-the-fire-light-veil.png",
     tapImageWidthPx: 128,
     tapImageAnchorFrac: 0.973,
+    // Erases (destination-out) the upper portion of the drawn image itself
+    // via a fade gradient - NOT a change to the asset's own pixels or its
+    // 128px draw width, just how much of its own upper reach stays visible
+    // per draw call. At real chart note spacing the full-height, full-
+    // opacity image otherwise visually overlaps the next falling note and
+    // the two read as one long object (see the consecutive-tap-boundary
+    // request this implements) - shortening the visible trail gives each
+    // note its own independent silhouette without touching note.time,
+    // NOTE_TRAVEL_SEC, or the asset itself.
+    tapFadeTopFrac: 0.46,
     themedHoldHead: true,
     hitColors: {
       flareCore: "rgba(235,248,255,",
@@ -263,25 +280,32 @@ export class Renderer {
 
     ctx.save();
 
-    // while correctly held, the whole lane gets a soft vertical energy
-    // wash behind everything else - not "a bit brighter", a lane-wide
-    // glow that reads instantly as "this lane is active" (item 4)
+    // while correctly held, the lane gets a soft vertical energy wash
+    // behind everything else - not "a bit brighter", a glow that reads
+    // instantly as "this lane is active" (item 4). Kept narrow and
+    // centered (was 88% of the lane width) - a wide wash was exactly what
+    // made a held HOLD and a neighboring lane's falling tap note read as
+    // one merged object (item 3: "隣接レーンへはみ出すglowを抑える").
     if (holding) {
       const laneGlow = ctx.createLinearGradient(cx, bandTop, cx, bandBottom);
-      laneGlow.addColorStop(0, "rgba(150,190,255,0.03)");
-      laneGlow.addColorStop(1, "rgba(170,205,255,0.16)");
+      laneGlow.addColorStop(0, "rgba(150,190,255,0.02)");
+      laneGlow.addColorStop(1, "rgba(165,175,255,0.09)");
       ctx.fillStyle = laneGlow;
-      ctx.fillRect(x + this.laneWidth * 0.06, bandTop, this.laneWidth * 0.88, bandBottom - bandTop);
+      ctx.fillRect(cx - this.laneWidth * 0.24, bandTop, this.laneWidth * 0.48, bandBottom - bandTop);
     }
 
     // BODY: a wide ribbon with two bright rim edges plus a bright core
     // line - its own silhouette has to read as "long press this far" even
     // before the player notices the head, not just a decorated head with
-    // a thin line trailing off (item 2/3)
+    // a thin line trailing off (item 2/3). Colored a touch more violet
+    // than a falling tap note's own cyan-blue light (every theme's tap
+    // note leans cyan/white) - a deliberately different "quality of
+    // light" so a HOLD body and an adjacent tap note never read as the
+    // same material even where their glows are close together.
     const baseAlpha = holding ? 0.62 : 0.32;
     const ribbonGrad = ctx.createLinearGradient(cx, bandTop, cx, bandBottom);
-    ribbonGrad.addColorStop(0, `rgba(150,190,255,${baseAlpha * 0.4})`);
-    ribbonGrad.addColorStop(1, `rgba(190,205,255,${baseAlpha})`);
+    ribbonGrad.addColorStop(0, `rgba(155,175,255,${baseAlpha * 0.4})`);
+    ribbonGrad.addColorStop(1, `rgba(195,180,255,${baseAlpha})`);
     ctx.fillStyle = ribbonGrad;
     ctx.fillRect(cx - ribbonW / 2, bandTop, ribbonW, bandBottom - bandTop);
 
@@ -307,12 +331,12 @@ export class Renderer {
     for (let i = 0; i < 2; i++) {
       const phase = ((currentTime * flowSpeed + i * 0.5 + note.id * 0.13) % 1 + 1) % 1;
       const py = bandTop + phase * bandLen;
-      const pulseGrad = ctx.createRadialGradient(cx, py, 0, cx, py, ribbonW * 0.9);
+      const pulseGrad = ctx.createRadialGradient(cx, py, 0, cx, py, ribbonW * 0.8);
       pulseGrad.addColorStop(0, `rgba(255,255,255,${holding ? 0.65 : 0.32})`);
       pulseGrad.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = pulseGrad;
       ctx.beginPath();
-      ctx.arc(cx, py, ribbonW * 0.9, 0, Math.PI * 2);
+      ctx.arc(cx, py, ribbonW * 0.8, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -345,11 +369,16 @@ export class Renderer {
     // terminal. Brightens on its own as it nears the judge line, and once
     // RELEASE becomes viable it pulses in sync with a matching flash on
     // the judge line itself, so "let go now" reads as one unmistakable
-    // cue (item 3). RELEASE_TOLERANCE_SEC in game.js is untouched - this
-    // is a purely visual approach cue, not a judge-timing change.
+    // cue (item 3). The gate itself visibly NARROWS on approach (an
+    // "aperture closing" cue - "収束/閉じる表現") and gets a pair of small
+    // chevrons sliding inward toward the center once RELEASE is viable, on
+    // top of (never replacing) the existing bracket/terminal/sync-flash
+    // cues - together these must never read as a plain tap note's judge
+    // point. RELEASE_TOLERANCE_SEC in game.js is untouched - this is a
+    // purely visual approach cue, not a judge-timing change.
     if (tailY >= -20 && tailY <= this.height + 20) {
-      const gateW = ribbonW * 2.1;
       const releasePulse = tailBoost > 0.55 ? (tailBoost - 0.55) / 0.45 : 0; // 0..1, only in the final approach
+      const gateW = ribbonW * 2.1 * (1 - tailBoost * 0.22); // closes in slightly on approach
       const syncPhase = 0.5 + 0.5 * Math.sin(currentTime * 9);
       const gateAlpha = (holding ? 0.85 : 0.6) + releasePulse * syncPhase * 0.4;
 
@@ -369,6 +398,24 @@ export class Renderer {
       ctx.moveTo(cx + gateW / 2, tailY - bracket);
       ctx.lineTo(cx + gateW / 2, tailY + bracket);
       ctx.stroke();
+
+      // closing chevrons - only appear once RELEASE is truly viable, and
+      // visibly slide inward toward the center as that window continues,
+      // reinforcing "the gate is shutting" rather than a static marker
+      if (releasePulse > 0) {
+        const chevronX = gateW / 2 * (1 - releasePulse * 0.55);
+        const chevronLen = 6 + tailBoost * 2;
+        ctx.globalAlpha = 0.55 + releasePulse * syncPhase * 0.4;
+        ctx.lineWidth = 1.6;
+        for (const side of [-1, 1]) {
+          ctx.beginPath();
+          ctx.moveTo(cx + side * (chevronX + chevronLen * 0.6), tailY - chevronLen);
+          ctx.lineTo(cx + side * chevronX, tailY);
+          ctx.lineTo(cx + side * (chevronX + chevronLen * 0.6), tailY + chevronLen);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
       ctx.restore();
 
       const tr = (holding ? 6.5 : 5.5) + tailBoost * 2;
@@ -437,7 +484,10 @@ export class Renderer {
       ctx.globalAlpha = 0.22 + pulse * 0.18;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.beginPath();
-      ctx.arc(cx, headY, headGlowW * 0.6, 0, Math.PI * 2);
+      // Capped to the lane's own width - see the matching cap in
+      // _drawThemedHoldHead's haloR (item 3: keep a held HOLD's own glow
+      // from becoming the dominant light source in a neighboring lane).
+      ctx.arc(cx, headY, Math.min(headGlowW * 0.6, this.laneWidth * 0.58), 0, Math.PI * 2);
       ctx.fill();
 
       // glow where the held lane meets the judge line - a clearly
@@ -643,60 +693,126 @@ export class Renderer {
     const anchorFrac = this.theme.tapImageAnchorFrac ?? 0.5;
     const topY = cy - h * anchorFrac;
 
-    // Gentle per-note sway while falling ("落下中の弱い揺らぎ") - a few
-    // px of horizontal drift, deterministic from time+id so nothing needs
-    // to be stored between frames.
-    const t = currentTime + note.id * 1.7;
-    const sway = Math.sin(t * 1.6) * (w * 0.025);
+    // Deterministic per-note phase seeded from id + the note's own chart
+    // time + lane (not just id) - "ノーツごとに位相をずらす", never a
+    // random number, so replaying the same chart always looks the same.
+    // This decorrelates sway/breathing/particles between notes so a run of
+    // consecutive taps never pulses in lockstep (which would read as one
+    // long object rather than several independent ones).
+    const seed = note.id * 1.7 + note.time * 2.3 + note.lane * 0.97;
+    const t = currentTime + seed;
+    const sway = Math.sin(t * 1.6) * (w * 0.026);
+    // A slow secondary cycle, deliberately much slower than the sway/
+    // particle motion - "下端の高密度発光部が弱く呼吸する" - modulates the
+    // base halo and a soft mid-body wash so the light reads as alive
+    // rather than a static image sliding downward. Small amplitude only:
+    // this must never look like blinking.
+    const breathe = 0.5 + 0.5 * Math.sin(t * 1.05 + seed * 0.6);
 
     ctx.save();
 
     // soft halo behind the light, brightening on approach - same "how
-    // close am I" cue every theme uses
+    // close am I" cue every theme uses, now with a weak breathing term
     const haloR = w * (0.5 + boost * 0.28);
     const haloY = topY + h * 0.62;
     const halo = ctx.createRadialGradient(cx + sway, haloY, 0, cx + sway, haloY, haloR);
-    halo.addColorStop(0, `rgba(120,195,255,${0.16 + boost * 0.18})`);
+    halo.addColorStop(0, `rgba(120,195,255,${0.15 + boost * 0.18 + breathe * 0.05})`);
     halo.addColorStop(1, "rgba(120,195,255,0)");
     ctx.fillStyle = halo;
     ctx.beginPath();
     ctx.arc(cx + sway, haloY, haloR, 0, Math.PI * 2);
     ctx.fill();
 
+    // a second, higher/slower soft wash simulating the ribbons' own
+    // internal light shifting at a different rate than the base's
+    // breathing - additive (lighter), low alpha, never a hard flicker
+    const midBreathe = 0.5 + 0.5 * Math.sin(t * 0.7 + seed * 1.3 + 2.1);
+    ctx.globalCompositeOperation = "lighter";
+    const midY = topY + h * 0.34;
+    const midGlow = ctx.createRadialGradient(cx + sway * 1.4, midY, 0, cx + sway * 1.4, midY, w * 0.42);
+    midGlow.addColorStop(0, `rgba(150,205,255,${0.05 + midBreathe * 0.05 + boost * 0.05})`);
+    midGlow.addColorStop(1, "rgba(150,205,255,0)");
+    ctx.fillStyle = midGlow;
+    ctx.beginPath();
+    ctx.arc(cx + sway * 1.4, midY, w * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+
     // restrained afterglow - 2 faint, smaller copies trailing upward from
     // the same anchor point ("控えめな残光"), never a busy multi-echo trail
     for (let i = 0; i < 2; i++) {
-      const echoScale = 0.86 - i * 0.14;
+      const echoScale = 0.84 - i * 0.14;
       const echoSway = Math.sin(t * 1.6 + i * 0.8) * (w * 0.03);
-      const echoCy = cy - h * (0.16 + i * 0.13);
+      const echoCy = cy - h * (0.14 + i * 0.11);
       const echoTopY = echoCy - h * echoScale * anchorFrac;
-      ctx.globalAlpha = (0.12 - i * 0.04) * (0.5 + boost * 0.5);
+      ctx.globalAlpha = (0.11 - i * 0.04) * (0.5 + boost * 0.5);
       ctx.drawImage(img, cx + echoSway - (w * echoScale) / 2, echoTopY, w * echoScale, h * echoScale);
-    }
-    ctx.globalAlpha = 1;
-
-    // a few small drifting particles unraveling upward near the light -
-    // deterministic per-note motion, small fixed budget (never stored)
-    for (let i = 0; i < 3; i++) {
-      const seed = i * 1.9;
-      const drift = Math.sin(t * 1.1 + seed) * (w * 0.16);
-      const py = topY + h * (0.06 + i * 0.1) - Math.abs(Math.sin(t * 0.7 + seed)) * h * 0.05;
-      const r = 1.1 + (i % 2) * 0.6;
-      ctx.globalAlpha = (0.3 + boost * 0.25) * (0.5 + 0.5 * Math.sin(t * 3 + seed));
-      ctx.fillStyle = i % 2 === 0 ? "rgba(220,240,255,0.9)" : "rgba(180,215,255,0.85)";
-      ctx.beginPath();
-      ctx.arc(cx + sway + drift, py, r, 0, Math.PI * 2);
-      ctx.fill();
     }
     ctx.globalAlpha = 1;
 
     // the light itself - glow increases only near the judge line, and it
     // brightens/pulses very slightly, mirroring the default theme's own
-    // shadowBlur-ramps-on-approach behaviour
+    // shadowBlur-ramps-on-approach behaviour. Condenses (tighter, brighter
+    // shadow) the closer it gets to the judge line ("判定ラインへ近づくほ
+    // ど光が少し凝縮する").
     ctx.shadowColor = "rgba(110,190,255,0.75)";
     ctx.shadowBlur = 5 + boost * 12;
     ctx.drawImage(img, cx + sway - w / 2, topY, w, h);
     ctx.shadowBlur = 0;
+
+    // Fade the upper portion of what was just drawn (halo + echoes + main
+    // image) toward transparent so each note's own visible reach ends well
+    // short of typical chart note spacing - see tapFadeTopFrac's comment
+    // in NOTE_THEMES. This shortens the PERCEIVED trail length without
+    // touching the asset, its 128px draw width, note.time, or fall speed;
+    // it is what keeps consecutive tap notes reading as separate objects
+    // with a visible gap between them rather than one connected column.
+    const fadeTopFrac = this.theme.tapFadeTopFrac ?? 0;
+    if (fadeTopFrac > 0) {
+      const fadeH = h * fadeTopFrac;
+      ctx.globalCompositeOperation = "destination-out";
+      const fadeGrad = ctx.createLinearGradient(0, topY, 0, topY + fadeH);
+      fadeGrad.addColorStop(0, "rgba(0,0,0,0.96)");
+      fadeGrad.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = fadeGrad;
+      ctx.fillRect(cx + sway - w, topY, w * 2, fadeH);
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    // A few small particles unraveling upward, unaffected by the fade mask
+    // above (drawn after it) so the light keeps visibly dissolving into
+    // sparse drifting motes even past where the solid ribbon has faded -
+    // "粒子が上方向へほどける". The 4th, larger one only appears
+    // occasionally (deterministic gate, not every frame) to read as a
+    // distinct light piece breaking away rather than steady drift
+    // ("小さな光片が離脱する").
+    for (let i = 0; i < 3; i++) {
+      const pseed = seed + i * 1.9;
+      const drift = Math.sin(t * 1.1 + pseed) * (w * 0.17);
+      const py = topY + h * (0.05 + i * 0.09) - Math.abs(Math.sin(t * 0.7 + pseed)) * h * 0.05;
+      const r = 1.1 + (i % 2) * 0.6;
+      ctx.globalAlpha = (0.3 + boost * 0.25) * (0.5 + 0.5 * Math.sin(t * 3 + pseed));
+      ctx.fillStyle = i % 2 === 0 ? "rgba(220,240,255,0.9)" : "rgba(180,215,255,0.85)";
+      ctx.beginPath();
+      ctx.arc(cx + sway + drift, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // occasionally a single brighter piece breaks away and drifts further
+    // than the steady particles above - a short, deterministic window
+    // once every ~2.6s of this note's own phase, not a per-frame gate
+    const detachPeriod = 2.6;
+    const detachPhase = ((t + seed * 3.7) % detachPeriod + detachPeriod) % detachPeriod;
+    if (detachPhase < 0.5) {
+      const dp = detachPhase / 0.5; // 0 (just broke away) -> 1 (fully dissolved)
+      const drift = Math.sin(seed * 4.2) * (w * 0.3) * (0.4 + dp * 0.6);
+      const py = topY - h * 0.02 - dp * h * 0.2;
+      ctx.globalAlpha = (0.45 + boost * 0.25) * (1 - dp);
+      ctx.fillStyle = "rgba(225,242,255,0.95)";
+      ctx.beginPath();
+      ctx.arc(cx + sway + drift, py, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 
     ctx.restore();
   }
@@ -725,10 +841,17 @@ export class Renderer {
     const anchorFrac = this.theme.tapImageAnchorFrac ?? 0.5;
     const topY = headY - h * anchorFrac;
 
-    const t = currentTime + note.id * 1.7;
+    const seed = note.id * 1.7 + note.time * 2.3 + note.lane * 0.97;
+    const t = currentTime + seed;
     const sway = Math.sin(t * 1.6) * (w * 0.02);
 
-    const haloR = w * (0.5 + headBoost * 0.3) * (holding ? 1.15 : 1);
+    // Capped to the lane's own width regardless of theme draw size - a
+    // HOLD head's held-state glow must not become the dominant light
+    // source spilling into a neighboring lane's own tap note (item 3: "隣
+    // 接レーンへはみ出すglowを抑える"). The falling tap note's own 128px
+    // silhouette is explicitly allowed to bleed (approved separately) but
+    // this HOLD-only glow layer is not part of that approval.
+    const haloR = Math.min(w * (0.5 + headBoost * 0.3) * (holding ? 1.15 : 1), this.laneWidth * 0.56);
     const haloY = topY + h * 0.62;
     const halo = ctx.createRadialGradient(cx + sway, haloY, 0, cx + sway, haloY, haloR);
     halo.addColorStop(0, `rgba(120,195,255,${(holding ? 0.26 : 0.16) + headBoost * 0.18})`);

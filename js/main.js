@@ -74,8 +74,8 @@ const titleLoadingPct = document.getElementById("title-loading-pct");
 
 // Coarse floor per readyState tier - matches how the rest of this file
 // already treats readyState>=2 (HAVE_CURRENT_DATA) as "can actually paint
-// a frame now" (see isVideoActive()/beginPlayTransition() for the per-song
-// background video's identical bar).
+// a frame now" (see isVideoActive()/runCountdown()'s PHASE "3" for the
+// per-song background video's identical bar).
 const READY_STATE_PROGRESS = [0, 20, 45, 70, 92];
 
 function computeOpeningVideoProgress() {
@@ -179,7 +179,32 @@ const titleBgm = document.getElementById("title-bgm");
 titleBgm.loop = true;
 let titleBgmUnlocked = false; // true once a play() from a real gesture has resolved
 
+// Set once init() calls setupOpeningAB() below - lets playTitleBgm() ask
+// "which track does the CURRENTLY selected OPENING want" without this
+// file ever branching on "A"/"B" itself (see js/openingAB.js's
+// getCurrentBgmSrc/OPENINGS.bgmSrc). Falls back to whatever src the
+// <audio> element already has (its index.html default) if called before
+// init() finishes wiring this up.
+let getOpeningBgmSrc = () => titleBgm.getAttribute("src");
+// The logical (relative) src currently loaded into titleBgm - compared
+// against getOpeningBgmSrc()'s return value rather than titleBgm.src
+// itself, since the element's own .src getter returns a resolved absolute
+// URL that a relative path never equals.
+let loadedBgmSrc = titleBgm.getAttribute("src");
+
 function playTitleBgm() {
+  // Switch to the currently-selected OPENING's own track first - never two
+  // BGMs overlapping (item 14). Reassigning .src while paused/at rest is
+  // safe; the actual .play() below is still the synchronous, gesture-
+  // triggered call iOS requires.
+  const desiredSrc = getOpeningBgmSrc();
+  if (desiredSrc && desiredSrc !== loadedBgmSrc) {
+    titleBgm.pause();
+    titleBgm.src = desiredSrc;
+    titleBgm.load();
+    titleBgm.currentTime = 0;
+    loadedBgmSrc = desiredSrc;
+  }
   titleBgm.volume = 1;
   const p = titleBgm.play();
   if (p && typeof p.catch === "function") {
@@ -279,13 +304,78 @@ let rafId = null;
 let paused = false;
 let input = null;
 
-// Silent, visual-only "get ready" lead-in shown before real playback
-// begins - see loop()'s pre-roll handling for the full explanation. Never
-// changes note.time, judge windows, or audio.currentTime's role as the
-// judge basis; only delays when audio.currentTime starts advancing.
+// Silent, visual-only "get ready" lead-in for the very first note(s) of a
+// chart - see runCountdown()'s PHASE "2"/"1" handling for the full
+// explanation. Never changes note.time, judge windows, or
+// audio.currentTime's role as the judge basis; only decides how long the
+// renderer draws notes at a virtual (negative) time BEFORE real
+// audio.currentTime starts advancing from 0.
 const PRE_ROLL_SEC = 1.5;
 let preRollRemainingSec = null; // null = not in the pre-roll phase
 let preRollLastFrameMs = null;
+
+// ---------- Shared "BLACKOUT -> 3 -> 2 -> 1 -> GAME START" pre-game flow ----------
+// Common to EVERY song (see startGame()/runCountdown() below) - never a
+// per-song branch. Three phases, run back to back by runCountdown()'s own
+// phase state machine:
+//
+//   PHASE "3": full BLACKOUT (background/lanes/HUD/notes all hidden) while,
+//     unseen, the background video's readiness, video.play() priming, the
+//     audio unlock/pause/currentTime=0 reset, renderer.resize(), and the
+//     chart fetch all happen (the same warm-up work the old
+//     beginPlayTransition() did). This phase HOLDS (does not advance to
+//     "2") until the background is confirmed ready, exactly like the old
+//     video-readiness wait - it just now gates "3" -> "2" instead of
+//     gating the whole countdown's end.
+//   PHASE "2": the background video fades in (dimly, behind the countdown
+//     overlay's own scrim - see .countdown-overlay.translucent in
+//     css/style.css) so the screen reads as "a video is playing" rather
+//     than "frozen", while "2" keeps counting on top of it. Partway through
+//     this phase (see PRE_ROLL_LEAD_INTO_PHASE2_SEC below), the invisible
+//     virtual note pre-roll begins: renderer.draw() is called every frame
+//     with a NEGATIVE virtual time counting up toward 0, exactly as the
+//     old post-countdown pre-roll did - it's just invisible for now (the
+//     notes-canvas itself is still opacity:0).
+//   PHASE "1": lanes/judge-pads/notes-canvas/HUD fade in too - now the
+//     virtual pre-roll becomes visible, so the player watches the first
+//     notes (including DEVIL IN THE FIRE's near-zero-time first note)
+//     already falling toward the judge line before "1" even disappears.
+//
+// The whole point of PRE_ROLL_LEAD_INTO_PHASE2_SEC: PHASE "2" and PHASE
+// "1" together last 2*COUNTDOWN_STEP_SEC of real time. As long as that is
+// >= PRE_ROLL_SEC, starting the virtual pre-roll clock that many seconds
+// before PHASE "1" ends means it naturally reaches virtual time 0 (i.e.
+// "ready for real playback") at EXACTLY the moment "1" disappears - so
+// real audio/judging can begin with zero added wait, instead of stacking
+// a second silent PRE_ROLL_SEC-long pause after the count. Judge windows/
+// note.time/BPM/global offset/audio.currentTime's role are all untouched -
+// this only changes when the renderer starts drawing notes, never how
+// they're judged (game.update()/laneDown()/laneUp() are never called
+// during any of this - see the gating below).
+const countdownOverlay = document.getElementById("countdown-overlay");
+const countdownNumberEl = document.getElementById("countdown-number");
+const countdownReadyEl = document.getElementById("countdown-ready");
+const COUNTDOWN_STEP_SEC = 0.85;
+// How far into PHASE "2" the invisible virtual pre-roll should start so it
+// finishes exactly when PHASE "1" ends (see the design note above). Clamped
+// to 0 as a safety net if PRE_ROLL_SEC ever grew larger than
+// 2*COUNTDOWN_STEP_SEC - in that edge case the pre-roll would start
+// immediately at "2" and a (smaller) residual wait would reappear after
+// "1", rather than silently mis-timing the note.
+const PRE_ROLL_LEAD_INTO_PHASE2_SEC = Math.max(0, COUNTDOWN_STEP_SEC * 2 - PRE_ROLL_SEC);
+// True from the moment a difficulty is tapped until real audio/notes
+// judging actually begins (all 3 phases + any video-readiness wait during
+// PHASE "3") - laneDown/laneUp and the pause button ignore taps entirely
+// while true (item 30), and an interruption (landscape, app backgrounded)
+// during this window cancels back to the difficulty-select screen rather
+// than risking audio/video starting in an inconsistent state (item 31 -
+// see cancelCountdownAndReturnToSelect()).
+let countdownActive = false;
+// Bumped on every new countdown start AND on cancellation - every in-
+// flight countdown callback checks its own captured value against the
+// current one before acting, so a stale callback from a canceled run can
+// never resume or duplicate playback.
+let countdownGeneration = 0;
 
 const bgVideo = document.getElementById("bg-video");
 const bgFallback = document.getElementById("bg-fallback");
@@ -406,7 +496,10 @@ async function init() {
   // rather than waiting for the first tap.
   showScreen("title");
   watchOpeningVideoLoading();
-  setupOpeningAB({ restartOpeningVideoLoading, playTitleBgVideo, resetTitleToStep1 });
+  const openingAB = setupOpeningAB({ restartOpeningVideoLoading, playTitleBgVideo, resetTitleToStep1 });
+  if (openingAB && openingAB.getCurrentBgmSrc) {
+    getOpeningBgmSrc = openingAB.getCurrentBgmSrc;
+  }
 
   input = new InputController(touchZones, {
     onLaneDown: (lane) => handleLaneDown(lane),
@@ -467,7 +560,14 @@ document.querySelectorAll(".btn-diff").forEach((btn) => {
   });
 });
 
-document.getElementById("btn-pause").addEventListener("click", () => setPaused(true));
+document.getElementById("btn-pause").addEventListener("click", () => {
+  // The BLACKOUT/3-2-1 countdown reveals #hud (with it, this button)
+  // during PHASE "1" (see runCountdown()), before real playback actually
+  // starts - ignore a tap here during that window so setPaused(true)/(false)
+  // can never race the countdown's own audio.currentTime=0 handoff.
+  if (countdownActive) return;
+  setPaused(true);
+});
 document.getElementById("btn-resume").addEventListener("click", () => setPaused(false));
 document.getElementById("btn-quit").addEventListener("click", () => {
   setPaused(false);
@@ -563,6 +663,14 @@ async function onPlaybackStarted() {
   screenPlayEl.dataset.comboTier = "0";
   paused = false;
 
+  // BLACKOUT immediately - #screen-play is now .active, but bg/lanes/
+  // notes-canvas/judge-pads/touch-zones/HUD all still sit at opacity:0
+  // (only .bg-ready/.ui-ready reveal them, added later by runCountdown()'s
+  // PHASE "2"/"1" - see that function) - the countdown overlay's own
+  // opaque #000 covers #bg-layer's dark-navy base color on top of that, so
+  // literally nothing of the play screen is visible yet (item 20).
+  screenPlayEl.classList.remove("bg-ready", "ui-ready");
+
   prepareBackgroundVideo();
 
   game = new RhythmGame(currentChart);
@@ -571,78 +679,145 @@ async function onPlaybackStarted() {
   window.addEventListener("resize", () => renderer.resize());
 
   lastDriftCheckMs = 0;
-  // See beginPlayTransition(): the silent visual pre-roll (and, at its
-  // end, real audio/game playback) does NOT start here anymore - it only
-  // starts once the background is confirmed either actually showable or
-  // genuinely broken, never on a bare "still loading" guess.
-  beginPlayTransition();
+
+  const myGen = ++countdownGeneration;
+  countdownActive = true;
+  runCountdown(myGen);
 }
 
-// How long the lane/HUD/note layer waits after the background reveals
-// before it starts fading in - keeps "background first, gameplay UI
-// after" instead of both popping in together.
-const UI_REVEAL_DELAY_MS = 500;
 // Emergency-only last resort: if the browser never fires ANY ready or
 // error signal for the video at all (a genuinely stuck load - e.g. a
-// dropped connection with nothing surfaced), the screen must not stay
-// black forever with no way forward. This is deliberately far longer than
-// any normal load and is NOT a "the video is just a bit slow" timeout -
+// dropped connection with nothing surfaced), PHASE "3" must not hold
+// forever with no way forward. This is deliberately far longer than any
+// normal load and is NOT a "the video is just a bit slow" timeout -
 // ordinary slow loading is handled by simply continuing to wait for a
 // real ready/error signal, with no cap.
 const EMERGENCY_FALLBACK_MS = 10000;
 
-// Choreographs "black -> background video -> game UI -> real playback"
-// instead of the old instant cut where lanes/HUD/notes (and even real
-// audio.currentTime advancement) could start before the background video
-// had confirmed it can actually show a frame. Purely visual/sequencing:
-// it never touches note.time or judge windows, and PRE_ROLL_SEC's own
-// duration is unchanged - this only decides when that countdown is
-// allowed to *begin*. A video that is merely slow to load is waited out
-// indefinitely (readyState/loadeddata/canplay); only a genuine failure
-// (a play() rejection or the element's own error event) switches over to
-// the CSS fallback and continues - "still loading" is never treated as
-// "broken".
-function beginPlayTransition() {
-  screenPlayEl.classList.remove("bg-ready", "ui-ready");
+// Drives the full PHASE "3" -> "2" -> "1" -> real-playback sequence (see
+// the design note above PRE_ROLL_LEAD_INTO_PHASE2_SEC for why). A single
+// rAF loop rather than three separate timers, so the invisible virtual
+// pre-roll clock (which spans the back half of "2" and all of "1") and the
+// per-phase countdown timing share one consistent `nowMs` per frame. Every
+// callback checks `myGen` against the live countdownGeneration so a
+// cancelCountdownAndReturnToSelect() call (landscape/backgrounded/video
+// failure) can never let a stale run keep advancing (item 31).
+function runCountdown(myGen) {
+  countdownOverlay.classList.remove("hidden", "fading", "translucent");
+  countdownReadyEl.classList.add("hidden");
 
-  let settled = false;
-  const proceed = () => {
-    if (settled) return;
-    settled = true;
-    screenPlayEl.classList.add("bg-ready");
-    setTimeout(() => screenPlayEl.classList.add("ui-ready"), UI_REVEAL_DELAY_MS);
-    // Only now does the silent visual pre-roll begin - real audio/game
-    // playback follows automatically once it finishes (see loop()).
-    preRollRemainingSec = PRE_ROLL_SEC;
-    preRollLastFrameMs = null;
-    loop();
-  };
+  function showNumber(text) {
+    countdownNumberEl.textContent = text;
+    countdownNumberEl.classList.remove("show");
+    void countdownNumberEl.offsetWidth; // restart the CSS pop animation
+    countdownNumberEl.classList.add("show");
+  }
+  showNumber("3");
 
-  if (!isVideoActive()) {
-    // No background video configured for this song - the CSS fallback
-    // gradient is ready immediately, but still hold for a short beat so
-    // the screen doesn't cut straight from black to a fully-lit UI.
-    setTimeout(proceed, 150);
-    return;
+  // PHASE "3" only ever WAITS here for real readiness/failure signals (see
+  // isVideoActive()/bgVideo's readyState) - it does not call .play() yet
+  // (that happens once PHASE "2" actually starts revealing the video, see
+  // below) and is otherwise a plain timer floor (COUNTDOWN_STEP_SEC) like
+  // the other two phases. `videoReady` flips true on the first genuine
+  // ready OR failure signal - a failure is not "still loading", it just
+  // means PHASE "2" will reveal the CSS fallback background instead.
+  // bgVideo.error is checked directly (not just future "error" events):
+  // prepareBackgroundVideo() (called just before this) resets `display` to
+  // "block" on every game start WITHOUT reassigning `src`/calling `.load()`
+  // again, so a video that already failed on an earlier attempt (retry,
+  // or quit-and-restart) sits with its old MediaError permanently set and
+  // will never fire a fresh "error" event - without this check PHASE "3"
+  // would wait the full EMERGENCY_FALLBACK_MS out on every later attempt.
+  let videoReady = !isVideoActive() || bgVideo.readyState >= 2 || !!bgVideo.error;
+  let readyGraceTimer = null;
+  function markVideoReady() {
+    if (videoReady) return;
+    videoReady = true;
+    if (readyGraceTimer) clearTimeout(readyGraceTimer);
+    countdownReadyEl.classList.add("hidden");
+  }
+  if (!videoReady) {
+    readyGraceTimer = setTimeout(() => {
+      if (myGen === countdownGeneration && !videoReady) countdownReadyEl.classList.remove("hidden");
+    }, 300);
+    bgVideo.addEventListener("loadeddata", markVideoReady, { once: true });
+    bgVideo.addEventListener("canplay", markVideoReady, { once: true });
+    bgVideo.addEventListener("error", markVideoReady, { once: true });
+    setTimeout(markVideoReady, EMERGENCY_FALLBACK_MS);
   }
 
-  // Start the background video decoding immediately, invisibly (opacity:0
-  // until proceed() runs) - so once it's revealed a moment later it's
-  // already playing smoothly instead of popping in mid-start. A genuine
-  // play() failure (caught here) moves straight to the CSS fallback and
-  // continues - it is not "still loading".
-  playBackgroundVideoIfActive().catch(() => proceed());
+  let phase = "p3"; // p3 -> p2 -> p1 -> (done, see the p1 branch below)
+  let phaseStartMs = null;
+  let preRollStarted = false;
 
-  if (bgVideo.readyState >= 2) {
-    proceed();
-    return;
+  function tick(nowMs) {
+    if (myGen !== countdownGeneration) return; // canceled - stop silently
+    if (phaseStartMs === null) phaseStartMs = nowMs;
+    const phaseElapsedSec = (nowMs - phaseStartMs) / 1000;
+
+    if (phase === "p3") {
+      // Holds here (never cuts to "2" early) until BOTH the fixed minimum
+      // duration AND real video-readiness are satisfied - a slow network
+      // extends "3" (with a quiet "READY..." after 300ms of extra wait),
+      // it never reveals a background that isn't actually showable yet.
+      if (phaseElapsedSec >= COUNTDOWN_STEP_SEC && videoReady) {
+        phase = "p2";
+        phaseStartMs = nowMs;
+        countdownOverlay.classList.add("translucent");
+        screenPlayEl.classList.add("bg-ready");
+        // First .play() call happens exactly here, right as the reveal
+        // starts - bgVideo.currentTime is still 0 (prepareBackgroundVideo()
+        // set it and nothing has touched it since), so what fades in is
+        // truly the video's first frame, not a video that had been
+        // silently running ahead of its own reveal.
+        playBackgroundVideoIfActive().catch(() => {});
+        showNumber("2");
+      }
+    } else if (phase === "p2") {
+      if (!preRollStarted && phaseElapsedSec >= PRE_ROLL_LEAD_INTO_PHASE2_SEC) {
+        preRollStarted = true;
+        preRollRemainingSec = PRE_ROLL_SEC;
+        preRollLastFrameMs = nowMs;
+      }
+      if (preRollStarted) {
+        const dt = (nowMs - preRollLastFrameMs) / 1000;
+        preRollLastFrameMs = nowMs;
+        preRollRemainingSec = Math.max(0, preRollRemainingSec - dt);
+        renderer.draw(-preRollRemainingSec, game, 0); // still invisible - notes-canvas is opacity:0 until PHASE "1"
+      }
+      if (phaseElapsedSec >= COUNTDOWN_STEP_SEC) {
+        phase = "p1";
+        phaseStartMs = nowMs;
+        screenPlayEl.classList.add("ui-ready"); // lanes/judge-pads/notes-canvas/HUD fade in
+        showNumber("1");
+      }
+    } else if (phase === "p1") {
+      const dt = (nowMs - preRollLastFrameMs) / 1000;
+      preRollLastFrameMs = nowMs;
+      preRollRemainingSec = Math.max(0, preRollRemainingSec - dt);
+      renderer.draw(-preRollRemainingSec, game, 0); // now visible - this is what the player watches during "1"
+      if (phaseElapsedSec >= COUNTDOWN_STEP_SEC) {
+        // "1" is done - real playback starts with (by design) zero added
+        // wait: the virtual pre-roll clock above should already be at (or
+        // very near) 0 by construction of PRE_ROLL_LEAD_INTO_PHASE2_SEC.
+        countdownNumberEl.classList.remove("show");
+        countdownReadyEl.classList.add("hidden");
+        countdownOverlay.classList.add("fading");
+        setTimeout(() => {
+          if (myGen === countdownGeneration) countdownOverlay.classList.add("hidden");
+        }, 500);
+        preRollRemainingSec = null;
+        preRollLastFrameMs = null;
+        countdownActive = false; // taps/pause count again from here on
+        audioEngine.resume();
+        playBackgroundVideoIfActive().catch(() => {});
+        loop();
+        return;
+      }
+    }
+    requestAnimationFrame(tick);
   }
-  bgVideo.addEventListener("loadeddata", proceed, { once: true });
-  bgVideo.addEventListener("canplay", proceed, { once: true });
-  // A native decode/network error is also a genuine failure, not slow
-  // loading - move to the CSS fallback and continue.
-  bgVideo.addEventListener("error", proceed, { once: true });
-  setTimeout(proceed, EMERGENCY_FALLBACK_MS);
+  requestAnimationFrame(tick);
 }
 
 // The background video is picture-only and never the timing/audio master:
@@ -651,10 +826,10 @@ function beginPlayTransition() {
 // back to the existing CSS gradient background without stopping the game.
 //
 // This only readies the element (rewound to 0) - it deliberately does NOT
-// call .play() here. Actual playback starts moments later via
-// beginPlayTransition(), invisibly (opacity:0) at first so it's already
-// decoding smoothly by the time it's revealed - see that function for the
-// full black -> background -> UI -> real playback sequencing.
+// call .play() here. Actual playback starts moments later, right as
+// runCountdown()'s PHASE "2" reveals it (see that function for the full
+// BLACKOUT -> "3" -> "2" -> "1" -> real playback sequencing), so what
+// fades in is genuinely the video's first frame.
 function prepareBackgroundVideo() {
   if (!currentManifest.backgroundUrl) {
     bgVideo.style.display = "none";
@@ -725,7 +900,12 @@ function triggerPadEffect(lane) {
 }
 
 function handleLaneDown(lane) {
-  if (paused || !game) return;
+  // The full BLACKOUT->3->2->1->video-wait->pre-roll window before real
+  // playback begins never counts taps as judgeable input (item 30) - the
+  // countdown overlay already physically covers/intercepts touches while
+  // shown, this is the explicit logic-level guard for the rest of that
+  // window too (video-wait + the existing silent pre-roll).
+  if (paused || !game || countdownActive) return;
   laneElements[lane].classList.add("active");
   judgePads[lane]?.classList.add("active");
   triggerPadEffect(lane);
@@ -745,7 +925,7 @@ function handleLaneDown(lane) {
 }
 
 function handleLaneUp(lane) {
-  if (paused || !game) return;
+  if (paused || !game || countdownActive) return;
   laneElements[lane].classList.remove("active");
   judgePads[lane]?.classList.remove("active");
   game.laneUp(lane, audioEngine.currentTime);
@@ -776,7 +956,7 @@ function isVideoActive() {
   return !!currentManifest.backgroundUrl && bgVideo.style.display !== "none";
 }
 
-// Returns a promise so callers that care (see beginPlayTransition) can
+// Returns a promise so callers that care (see runCountdown()) can
 // tell a real failure apart from "still loading" - it resolves once
 // playback actually starts, and rejects (after switching the display over
 // to the CSS fallback itself) only on a genuine play() failure.
@@ -800,14 +980,12 @@ function setPaused(value) {
     audioEngine.pause();
     if (isVideoActive()) bgVideo.pause();
     if (rafId) cancelAnimationFrame(rafId);
-    // Don't let the pre-roll countdown "jump forward" by however long the
-    // player stayed paused - see the dt calc in loop() below.
-    preRollLastFrameMs = null;
   } else {
-    // Real playback only actually resumes once any pre-roll countdown has
-    // finished (loop() below drives that) - pausing/resuming mid-pre-roll
-    // must not skip straight into audible playback.
-    if (preRollRemainingSec === null) audioEngine.resume();
+    // #btn-pause is gated on !countdownActive (see its click handler), so
+    // setPaused(true) can never fire during runCountdown()'s BLACKOUT/3-2-1
+    // window - by the time this resume path can run, real playback has
+    // always already started (preRollRemainingSec is always null here).
+    audioEngine.resume();
     playBackgroundVideoIfActive().catch(() => {});
     loop();
   }
@@ -822,34 +1000,41 @@ function stopGame() {
   preRollLastFrameMs = null;
 }
 
-// Visual-only "get ready" lead-in shown before real playback begins, so
-// even the chart's very first note gets a real look before it's judged
-// (see PRE_ROLL_SEC). It never touches note.time, the judge windows, or
-// audio.currentTime's role as the judge basis - it only delays the moment
-// audio.currentTime starts advancing from 0, using the exact same
-// pause()-now/resume()-later unlock the pause/resume feature already
-// relies on. game.update()/laneDown() are not called during this phase,
-// so no note can be judged (missed or hit) before it truly begins.
+// Cancels an in-progress BLACKOUT/3-2-1/video-wait/pre-roll run and drops
+// back to the difficulty-select screen, rather than trying to pause/resume
+// mid-count. Chosen deliberately as the simplest safe option (see item 31
+// of the request this implements): nothing in this window has started
+// real audio playback yet (audio.currentTime is still 0), so there is no
+// meaningful state to preserve - resuming a partially-elapsed count after
+// an interruption would need to re-verify all of that state anyway, with
+// more edge cases and no real benefit to the player over just tapping the
+// difficulty again. Bumping countdownGeneration invalidates every in-
+// flight rAF/timeout callback from the canceled run (see runCountdown()).
+function cancelCountdownAndReturnToSelect() {
+  if (!countdownActive) return;
+  countdownGeneration++;
+  countdownActive = false;
+  countdownOverlay.classList.add("hidden");
+  countdownOverlay.classList.remove("fading", "translucent");
+  countdownReadyEl.classList.add("hidden");
+  countdownNumberEl.classList.remove("show");
+  stopGame();
+  screenPlayEl.classList.remove("bg-ready", "ui-ready");
+  showScreen("select");
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && countdownActive) cancelCountdownAndReturnToSelect();
+});
+
+// Real-playback frame loop - only ever entered once runCountdown()'s
+// PHASE "1" has finished (audio.currentTime already resumed, notes-canvas
+// already visible). The visual-only "get ready" pre-roll that used to run
+// here, before real playback, now runs entirely inside runCountdown()
+// itself (see PRE_ROLL_SEC/PRE_ROLL_LEAD_INTO_PHASE2_SEC there) - by the
+// time this function is ever called, preRollRemainingSec is always null.
 function loop() {
   if (paused) return;
-
-  if (preRollRemainingSec !== null) {
-    const nowMs = performance.now();
-    const dt = preRollLastFrameMs === null ? 0 : (nowMs - preRollLastFrameMs) / 1000;
-    preRollLastFrameMs = nowMs;
-    preRollRemainingSec -= dt;
-
-    if (preRollRemainingSec <= 0) {
-      preRollRemainingSec = null;
-      preRollLastFrameMs = null;
-      audioEngine.resume();
-      playBackgroundVideoIfActive().catch(() => {});
-    } else {
-      renderer.draw(-preRollRemainingSec, game, 0);
-      rafId = requestAnimationFrame(loop);
-      return;
-    }
-  }
 
   const currentTime = audioEngine.currentTime;
   game.update(currentTime);
@@ -912,7 +1097,12 @@ function isLandscape() {
 function handleOrientationChange() {
   if (isLandscape()) {
     landscapeOverlay.classList.remove("hidden");
-    if (screens.play.classList.contains("active") && !paused && game) {
+    if (countdownActive) {
+      // Nothing real (audio/video) has started yet during this window -
+      // see cancelCountdownAndReturnToSelect()'s comment for why a clean
+      // cancel-and-return is the chosen safe behavior over pause/resume.
+      cancelCountdownAndReturnToSelect();
+    } else if (screens.play.classList.contains("active") && !paused && game) {
       setPaused(true);
     }
   } else {

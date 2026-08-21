@@ -389,28 +389,6 @@ html, body {
   box-shadow: 0 0 10px rgba(150, 180, 255, 0.25);
 }
 
-/* ---------- DEV-ONLY, TEMPORARY: nijiiro-eden-2 background-crop compare ----------
-   Shown only while that one song is active (see js/main.js's
-   setupNijiiroBgSwitch()) - reuses .opening-ab-btn's exact look so it reads
-   as "the same kind of dev toggle" rather than new chrome. Sits just below
-   #btn-pause (top: 0.7rem) with enough gap to never overlap it. Remove
-   this whole block + the matching HTML/JS once a candidate is chosen. */
-.nijiiro-bg-switch {
-  position: absolute;
-  top: calc(3.3rem + var(--safe-top));
-  right: calc(0.9rem + var(--safe-right));
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-.nijiiro-bg-switch.hidden { display: none; }
-.nijiiro-bg-label {
-  font-size: 0.5rem;
-  letter-spacing: 0.08em;
-  color: rgba(225, 232, 255, 0.45);
-}
-
 /* ---------- OPENING loading overlay ----------
    Shown only while the OPENING background video isn't confirmed ready to
    render a frame yet (see js/main.js's watchOpeningVideoLoading()) - a

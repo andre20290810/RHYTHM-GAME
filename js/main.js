@@ -393,6 +393,77 @@ bgVideo.addEventListener("error", () => {
   bgVideo.style.display = "none";
   bgFallback.style.display = "block";
 });
+// Applies gameplay-background fit/position/scale/heightPercent as inline
+// styles on the one shared #bg-video element - the single place both
+// selectSong() (real per-song manifest data) and the nijiiro-eden-2 dev
+// comparison switch (see setupNijiiroBgSwitch() below) go through, so
+// there is exactly one implementation of "what these 4 knobs mean" rather
+// than two copies drifting apart. heightPercent < 100 shrinks the video
+// element's own height (recentered vertically via top/margin), which -
+// on a fixed object-fit:cover - raises the box's own aspect ratio and so
+// shifts which axis cover crops from left/right toward top/bottom (see
+// songCatalog.js's fuller explanation of why this works).
+function applyBackgroundDisplay(fit, position, scale, heightPercent) {
+  bgVideo.style.objectFit = fit;
+  bgVideo.style.objectPosition = position;
+  bgVideo.style.transform = scale !== 1 ? `scale(${scale})` : "";
+  const h = typeof heightPercent === "number" ? heightPercent : 100;
+  if (h !== 100) {
+    bgVideo.style.height = `${h}%`;
+    bgVideo.style.top = `${(100 - h) / 2}%`;
+  } else {
+    bgVideo.style.height = "";
+    bgVideo.style.top = "";
+  }
+}
+
+// DEV-ONLY, TEMPORARY: three crop candidates for nijiiro-eden-2's
+// gameplay background (see the request this implements - the shared
+// `cover` treatment every song uses crops the video's own baked-in
+// "虹色のエデン" title text left/right on this specific asset). Each
+// candidate only ever goes through applyBackgroundDisplay() - the exact
+// same function selectSong() uses for real manifest data - so comparing
+// them live never depends on any separate code path.
+//   A: mildest crop reduction (heightPercent 90) - closest to today's
+//      look, small letterbox top/bottom.
+//   B: middle ground (heightPercent 72) - noticeably less left/right
+//      crop, moderate top/bottom letterbox.
+//   C: object-fit:contain - guarantees zero cropping in either direction
+//      (this exact video previously shipped with `contain` - see commit
+//      09dce4c - before a later round moved every song to `cover`), at
+//      the cost of the largest top/bottom letterbox of the three.
+const NIJIIRO_BG_CANDIDATES = {
+  A: { fit: "cover", position: "center center", scale: 1, heightPercent: 90 },
+  B: { fit: "cover", position: "center center", scale: 1, heightPercent: 72 },
+  C: { fit: "contain", position: "center center", scale: 1, heightPercent: 100 },
+};
+const nijiiroBgSwitchEl = document.getElementById("nijiiro-bg-switch");
+
+function setupNijiiroBgSwitch() {
+  if (!nijiiroBgSwitchEl) return;
+  nijiiroBgSwitchEl.querySelectorAll("[data-bg]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cand = NIJIIRO_BG_CANDIDATES[btn.dataset.bg];
+      if (!cand) return;
+      applyBackgroundDisplay(cand.fit, cand.position, cand.scale, cand.heightPercent);
+      nijiiroBgSwitchEl.querySelectorAll("[data-bg]").forEach((b) => b.classList.toggle("active", b === btn));
+    });
+  });
+}
+
+// Called from onPlaybackStarted() once the current song is known - shows
+// the switch (and resets to the song's own real manifest-driven display)
+// only while nijiiro-eden-2 is the song actually playing, so every other
+// song is completely unaffected and never sees this control at all.
+function updateNijiiroBgSwitchVisibility() {
+  if (!nijiiroBgSwitchEl) return;
+  const isNijiiro = currentManifest && currentManifest.id === "nijiiro-eden-2";
+  nijiiroBgSwitchEl.classList.toggle("hidden", !isNijiiro);
+  if (isNijiiro) {
+    nijiiroBgSwitchEl.querySelectorAll("[data-bg]").forEach((b) => b.classList.remove("active"));
+  }
+}
+
 bgVideo.addEventListener("playing", () => {
   bgFallback.style.display = "none";
 });
@@ -457,6 +528,18 @@ async function selectSong(entry) {
       bgFallback.style.display = "block";
     }
 
+    // Per-song gameplay-background fit/position/scale/heightPercent (see
+    // songCatalog.js's derivation from an optional manifest.background.
+    // {fit,position,scale,heightPercent}) - applied via the shared
+    // applyBackgroundDisplay() helper (also used by the nijiiro-eden-2 dev
+    // comparison switch below) so every song selection re-asserts its own
+    // values on the one shared, reused #bg-video element. Defaults (cover /
+    // center center / scale 1 / height 100%) exactly match css/style.css's
+    // own #bg-video rule, so any song without its own background tuning
+    // renders identically to before this existed - no song-name branch
+    // here, purely data from the manifest just loaded.
+    applyBackgroundDisplay(currentManifest.backgroundFit, currentManifest.backgroundPosition, currentManifest.backgroundScale, currentManifest.backgroundHeightPercent);
+
     // Difficulty-select jacket art - manifest-driven (manifest.jacket via
     // jacketUrl), never a song-name branch here. Falls back to
     // --select-jacket-url's CSS :root default (the pre-existing artwork)
@@ -505,6 +588,8 @@ async function init() {
     onLaneDown: (lane) => handleLaneDown(lane),
     onLaneUp: (lane) => handleLaneUp(lane),
   });
+
+  setupNijiiroBgSwitch();
 }
 
 // ---------- OPENING STEP 1 -> STEP 2 ----------
@@ -671,6 +756,7 @@ async function onPlaybackStarted() {
   // literally nothing of the play screen is visible yet (item 20).
   screenPlayEl.classList.remove("bg-ready", "ui-ready");
 
+  updateNijiiroBgSwitchVisibility();
   prepareBackgroundVideo();
 
   game = new RhythmGame(currentChart);
@@ -866,6 +952,16 @@ const VIDEO_DRIFT_THRESHOLD_SEC = 1.0; // only correct large, clearly-audible/vi
 const VIDEO_DRIFT_CHECK_MS = 4000; // checked rarely, never per-frame
 let lastDriftCheckMs = 0;
 
+// How long real playback continues, still rendering/still playing audio,
+// after the audio element itself first reports true completion, before
+// actually cutting to RESULT - long enough for the very last judge popup/
+// hit-effect to finish its own animation rather than being yanked away
+// mid-beat, deliberately short so it never reads as an added wait.
+const SONG_END_GRACE_SEC = 0.5;
+// Set the moment loop() first observes real audio completion this run;
+// null the rest of the time (see stopGame()'s reset and loop()'s own use).
+let songEndSignalAtMs = null;
+
 function maybeCorrectVideoDrift(currentTime, nowMs) {
   if (!ENABLE_VIDEO_DRIFT_CORRECTION) return;
   if (!currentManifest.backgroundUrl || bgVideo.style.display === "none") return;
@@ -998,6 +1094,7 @@ function stopGame() {
   rafId = null;
   preRollRemainingSec = null;
   preRollLastFrameMs = null;
+  songEndSignalAtMs = null;
 }
 
 // Cancels an in-progress BLACKOUT/3-2-1/video-wait/pre-roll run and drops
@@ -1046,10 +1143,27 @@ function loop() {
   const progress = audioEngine.duration ? Math.min(1, currentTime / audioEngine.duration) : 0;
   document.getElementById("hud-progress-bar").style.width = `${progress * 100}%`;
 
-  const songEnded = audioEngine.duration > 0 && currentTime >= audioEngine.duration - 0.05;
-  if (game.finished || songEnded) {
-    finishGame();
-    return;
+  // RESULT is reached only once the real audio has actually finished
+  // playing - never merely because the chart ran out of notes to judge
+  // (game.finished). A track's last charted note commonly sits a couple of
+  // seconds before its true end (DEVIL IN THE FIRE: ~1.8s, nijiiro-eden-2:
+  // ~1.3s, both an ordinary musical outro/tail, not a bug in the chart) -
+  // ending on game.finished alone cut that tail off and moved to RESULT
+  // audibly early. audioEngine.element.ended is the primary signal (the
+  // native "this media has finished" state); the duration-based check is
+  // a fallback for browsers that don't fire it reliably. Neither
+  // countdown/PRE_ROLL time nor background-video duration factor in here
+  // at all - audio.currentTime is paused at 0 throughout that entire
+  // window, so it can't contribute to this comparison either way.
+  const audioReallyEnded = audioEngine.element.ended || (audioEngine.duration > 0 && currentTime >= audioEngine.duration - 0.05);
+  if (audioReallyEnded) {
+    if (songEndSignalAtMs === null) songEndSignalAtMs = performance.now();
+    if (performance.now() - songEndSignalAtMs >= SONG_END_GRACE_SEC * 1000) {
+      finishGame();
+      return;
+    }
+  } else {
+    songEndSignalAtMs = null;
   }
   rafId = requestAnimationFrame(loop);
 }

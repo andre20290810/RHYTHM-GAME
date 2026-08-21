@@ -48,12 +48,43 @@ export async function loadManifest(entry) {
   // (for a future song) an absolute URL - no BASE/dir prefix applied.
   const jacketUrl = manifest.jacket || null;
 
+  // Per-song gameplay-background display tuning (fit/position/scale) - an
+  // optional { fit, position, scale } object nested under manifest.background
+  // (see songs/nijiiro-eden-2/manifest.json for the first real use: its R2
+  // video's own baked-in "虹色のエデン" title text sits close enough to the
+  // left/right edges that the shared `cover` treatment every other song uses
+  // crops it). Defaults below are exactly today's global CSS values (cover /
+  // center center / no extra scale), so any song whose manifest doesn't set
+  // these renders byte-for-byte as before - this is additive per-song data,
+  // never a song-name branch in js/main.js or css/style.css.
+  const bg = manifest.background || {};
+  const backgroundFit = bg.fit || "cover";
+  const backgroundPosition = bg.position || "center center";
+  const backgroundScale = typeof bg.scale === "number" ? bg.scale : 1;
+  // With object-fit:cover on a box exactly 100% of the viewport, WHICH axis
+  // gets cropped is decided entirely by how the box's own aspect ratio
+  // compares to the video's: crop is on left/right when boxAspect (w/h) is
+  // SMALLER than the video's own aspect, and on top/bottom when boxAspect
+  // is LARGER. heightPercent shrinks the video element's own height (still
+  // width:100%, vertically re-centered - see main.js) below 100%, which
+  // raises the box's effective aspect ratio (390 / (844*heightPercent/100)
+  // grows as heightPercent shrinks) - shifting cover's crop away from
+  // left/right and onto top/bottom, at the cost of a top/bottom letterbox
+  // band (filled by #bg-layer's own background-color, same as `contain`
+  // already does). 100 (full height, today's behavior for every song
+  // without this field) never changes anything for songs that don't set it.
+  const backgroundHeightPercent = typeof bg.heightPercent === "number" ? bg.heightPercent : 100;
+
   return {
     ...manifest,
     _dir: `${BASE}${dir}`,
     audioUrl: `${BASE}${dir}${manifest.audio}`,
     backgroundUrl,
     jacketUrl,
+    backgroundFit,
+    backgroundPosition,
+    backgroundScale,
+    backgroundHeightPercent,
   };
 }
 

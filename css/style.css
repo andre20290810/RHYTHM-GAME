@@ -294,27 +294,40 @@ html, body {
    alongside the title text itself - never a song-name branch, just which
    OPENING is currently selected. OPENING A is completely untouched (no
    selector below matches it, so .title-line keeps its existing serif
-   italic/weight/spacing/gradient exactly as before - item 17). OPENING B
-   swaps to Orbitron (angular/geometric/all-caps sci-fi-tactical, see the
-   font link in index.html's <head>) and drops the italic serif styling;
-   the gradient/glow treatment itself (.title-line, unchanged) still
-   applies underneath so both openings share the same "lit from within"
-   quality even though the letterforms differ. KIVA (.title-line-3) gets
-   extra letter-spacing and weight so it reads especially hard/blocky. */
+   italic/weight/spacing/gradient exactly as before - item 17).
+   OPENING B swaps to Cinzel (Roman-inscription/Trajan-style serif capitals,
+   see the font link in index.html's <head>) at one uniform font-size/
+   weight for all 3 lines, with NO letter-spacing override - approved after
+   two rounds of A/B comparison (tools/kiva-logo-uniform-final.html):
+   every line uses the exact same font-size/weight, width differences
+   between "Legend"/"Of"/"KIVA" come from their own natural word length
+   (never from letter-spacing or a per-line font-size), and each line is
+   centered independently via .title-main's own text-align:center so all
+   3 lines share one common center axis. The gradient/glow treatment
+   itself (.title-line, unchanged) still applies underneath so both
+   openings share the same "lit from within" quality even though the
+   letterforms differ.
+   text-transform:uppercase is required here: js/openingAB.js's titleLines
+   for OPENING B are ["Legend","Of","KIVA"] (mixed-case, same source data
+   used for OPENING A's "Memories"/"Of"/"ALEXIA"), but Cinzel renders
+   lowercase letters as its own smaller small-caps glyphs - left as-is,
+   "Legend"/"Of" would render as one big cap + small caps, reproducing the
+   drop-cap look that was explicitly rejected. Forcing display-only
+   uppercase (not touching the underlying text content/JS) is what makes
+   this match the approved all-caps mockup. */
 #screen-title[data-opening="B"] .title-main {
-  font-family: "Orbitron", "Eurostile", "Arial Narrow", "Helvetica Neue", sans-serif;
+  font-family: "Cinzel", "Georgia", "Times New Roman", serif;
   font-style: normal;
   font-weight: 700;
+  text-transform: uppercase;
 }
-#screen-title[data-opening="B"] .title-line-1 {
-  letter-spacing: 0.08em;
-}
-#screen-title[data-opening="B"] .title-line-2 {
-  letter-spacing: 0.5em;
-}
+#screen-title[data-opening="B"] .title-line-1,
+#screen-title[data-opening="B"] .title-line-2,
 #screen-title[data-opening="B"] .title-line-3 {
-  font-weight: 900;
-  letter-spacing: 0.12em;
+  font-size: 4.2rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  opacity: 1;
 }
 .tap-to-start {
   position: absolute;
@@ -374,6 +387,28 @@ html, body {
   background: rgba(120, 160, 255, 0.16);
   border-color: rgba(190, 210, 255, 0.4);
   box-shadow: 0 0 10px rgba(150, 180, 255, 0.25);
+}
+
+/* ---------- DEV-ONLY, TEMPORARY: nijiiro-eden-2 background-crop compare ----------
+   Shown only while that one song is active (see js/main.js's
+   setupNijiiroBgSwitch()) - reuses .opening-ab-btn's exact look so it reads
+   as "the same kind of dev toggle" rather than new chrome. Sits just below
+   #btn-pause (top: 0.7rem) with enough gap to never overlap it. Remove
+   this whole block + the matching HTML/JS once a candidate is chosen. */
+.nijiiro-bg-switch {
+  position: absolute;
+  top: calc(3.3rem + var(--safe-top));
+  right: calc(0.9rem + var(--safe-right));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.nijiiro-bg-switch.hidden { display: none; }
+.nijiiro-bg-label {
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  color: rgba(225, 232, 255, 0.45);
 }
 
 /* ---------- OPENING loading overlay ----------
@@ -670,8 +705,15 @@ html, body {
    screen's treatment - cropping some of the source frame is explicitly
    acceptable here (see the request this implements). This is a visual-only
    change: lane/judge-line/note positions and all judge/score/combo logic
-   live entirely in js/game.js and js/renderer.js and are untouched. */
-#bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; }
+   live entirely in js/game.js and js/renderer.js and are untouched.
+   object-fit/object-position here are the DEFAULT only - js/main.js's
+   selectSong() overrides them per song as inline styles from
+   manifest.background.{fit,position,scale} (see songCatalog.js), falling
+   back to exactly these values for any song that doesn't set its own.
+   transform-origin matches so a per-song `scale()` (also set inline, e.g.
+   for nijiiro-eden-2 - see its manifest) zooms from center, staying
+   clipped by #bg-layer's own overflow:hidden above. */
+#bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; transform-origin: center center; }
 #bg-fallback {
   position: absolute; inset: 0;
   background:

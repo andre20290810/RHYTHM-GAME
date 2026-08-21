@@ -10,16 +10,16 @@
 <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png" />
 <link rel="manifest" href="manifest.webmanifest" />
 <meta name="theme-color" content="#060814" />
-<!-- OPENING B ("Legend / Of / KIVA") title font only - a hard, angular,
-     geometric sci-fi/tactical face, deliberately distinct from OPENING A's
-     serif italic (Memories Of ALEXIA, unchanged - see css/style.css's
-     .title-line rules). Loaded from Google Fonts with font-display:swap;
-     if the network request fails, css/style.css's font-family fallback
-     stack (condensed/bold system sans) still reads as angular/hard rather
-     than falling back to the serif used elsewhere. -->
+<!-- OPENING B ("Legend / Of / KIVA") title font only - Cinzel, a Roman-
+     inscription/Trajan-style serif capital face, deliberately distinct from
+     OPENING A's serif italic (Memories Of ALEXIA, unchanged - see
+     css/style.css's .title-line rules). Loaded from Google Fonts with
+     font-display:swap; if the network request fails, css/style.css's
+     font-family fallback stack (Georgia/Times New Roman serif) still reads
+     as a serif capital lockup rather than falling back to a sans face. -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -153,6 +153,19 @@
       <div id="hud-judge"></div>
       <button id="btn-pause" class="btn-icon">II</button>
       <div id="hud-progress"><div id="hud-progress-bar"></div></div>
+    </div>
+
+    <!-- DEV-ONLY, TEMPORARY: nijiiro-eden-2 background-crop comparison
+         switch. Shown only while that one song is playing (see
+         js/main.js's setupNijiiroBgSwitch()) - lets the crop candidates
+         (A/B/C) be swapped live on a real device instead of guessing a
+         final value blind. Remove this block + its CSS + its JS once a
+         candidate is chosen (see the request this implements). -->
+    <div id="nijiiro-bg-switch" class="nijiiro-bg-switch hidden">
+      <span class="nijiiro-bg-label">NIJIIRO BG</span>
+      <button type="button" class="opening-ab-btn" data-bg="A">A</button>
+      <button type="button" class="opening-ab-btn" data-bg="B">B</button>
+      <button type="button" class="opening-ab-btn" data-bg="C">C</button>
     </div>
 
     <div id="pause-overlay" class="overlay hidden">

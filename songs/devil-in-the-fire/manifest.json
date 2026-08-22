@@ -11,7 +11,7 @@
   "jacket": "assets/images/jackets/devil-in-the-fire-jacket.jpg",
   "background": {
     "type": "video",
-    "src": "https://pub-fe2b7ec648804636bd6e616bd4ffe4e2.r2.dev/copy_632B68CA-944E-4465-9F4B-60786ED01DB4.mov"
+    "src": "https://pub-fe2b7ec648804636bd6e616bd4ffe4e2.r2.dev/copy_1B8A863F-EEF0-4419-8586-F7477224647E.mov"
   },
   "difficulties": {
     "EASY": "charts/easy.json",

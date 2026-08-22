@@ -71,31 +71,32 @@ const NOTE_THEMES = {
     explosiveHit: false,
   },
   "devil-in-the-fire": {
-    // "Blue light veil" - a collection of blue-white light gathering into
-    // a dense base and unraveling upward into a long wavering afterglow
-    // (see tools/note-proto-v4/light-veil-v1-1.svg, the approved
-    // prototype this PNG was rasterized from - deterministic SVG->PNG,
-    // no image-generation AI). Drawn at a FIXED pixel width (see
-    // tapImageWidthPx) rather than scaled to the lane, per the approved
-    // draw-size comparison - deliberately larger than the lane so it
-    // reads as a real light effect, not a small icon. tapImageAnchorFrac
-    // is how far down the image (as a fraction of its own height) the
-    // bright base/judge point sits - measured from the actual asset
-    // (brightest-row analysis), not guessed, so the judge point lines up
-    // with the note's true (x,y) regardless of draw size.
-    tapImageSrc: "assets/notes/devil-in-the-fire-light-veil.png",
-    tapImageWidthPx: 128,
-    tapImageAnchorFrac: 0.973,
-    // Erases (destination-out) the upper portion of the drawn image itself
-    // via a fade gradient - NOT a change to the asset's own pixels or its
-    // 128px draw width, just how much of its own upper reach stays visible
-    // per draw call. At real chart note spacing the full-height, full-
-    // opacity image otherwise visually overlaps the next falling note and
-    // the two read as one long object (see the consecutive-tap-boundary
-    // request this implements) - shortening the visible trail gives each
-    // note its own independent silhouette without touching note.time,
-    // NOTE_TRAVEL_SEC, or the asset itself.
-    tapFadeTopFrac: 0.46,
+    // Visual-Reference-derived TAP art: a white-hot dense energy core with
+    // red-orange + white-silver electric arcs, a sharp bottom convergence
+    // point, and surrounding sparks - cut directly from the approved
+    // reference sheet (no redraw/recolor), then re-rendered at a shorter
+    // vertical footprint via a piecewise vertical compression (long upper
+    // arc reach compressed hardest, the dense core compressed moderately,
+    // the tip taper left closest to its natural proportion so the sharp
+    // point stays sharp) - NOT a uniform shrink, so the design language/
+    // silhouette/palette are pixel-faithful to the reference at a size
+    // that actually fits the chart's real tightest note spacing. Size "B"
+    // of the 3 evaluated candidates (72/82/92px) - the one approved for
+    // production. tapImageAnchorFrac is how far down the image (as a
+    // fraction of its own height) the sharp bottom tip/judge point sits -
+    // measured from the actual asset (bottom-up alpha scan), not guessed,
+    // so the judge point lines up with the note's true (x,y) regardless
+    // of draw size.
+    tapImageSrc: "assets/notes/devil-in-the-fire-tap.png",
+    tapImageWidthPx: 82,
+    tapImageAnchorFrac: 0.9588,
+    // No upper-trail fade mask: at the real 0.163s-apart chart spacing,
+    // this asset's own compressed vertical footprint already keeps
+    // consecutive notes' sharp tips individually readable (approved after
+    // direct testing against the real chart's tightest same-lane pair/
+    // triplet) - a thin bright arc filament can still visibly connect the
+    // two in that exact worst case, which was explicitly accepted as-is,
+    // so no additional fade/shrink/dim is layered on top.
     themedHoldHead: true,
     hitColors: {
       flareCore: "rgba(235,248,255,",

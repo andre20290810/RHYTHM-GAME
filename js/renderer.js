@@ -87,9 +87,25 @@ const NOTE_THEMES = {
     // measured from the actual asset (bottom-up alpha scan), not guessed,
     // so the judge point lines up with the note's true (x,y) regardless
     // of draw size.
-    tapImageSrc: "assets/notes/devil-in-the-fire-tap.png",
+    // Production TAP/HOLD-head art is this looping 12-frame sprite sheet
+    // (349x340 per frame, 4188x340 total), approved after real-iPhone
+    // review at the true 82px display width - see
+    // tools/devil-vfx-tap-anim-compare.html (dev-only comparison page,
+    // kept only as a reference copy; production never loads it). Every
+    // frame's sharp bottom judge-tip is byte-identical (generation-time
+    // "protect zone" check) at the same tapImageAnchorFrac/width as the
+    // static asset it replaces, so the judge point and draw size are
+    // unaffected by animating - only which frame gets sampled changes.
+    // tapAnimFrames/tapAnimFps drive deterministic frame selection (see
+    // Renderer._animFrame); the note's own note.time shifts its local
+    // animation clock so simultaneous/consecutive notes don't flicker in
+    // lockstep, but the same chart always reproduces the same look (no
+    // per-frame randomness anywhere in frame selection).
+    tapImageSrc: "assets/notes/devil-in-the-fire-tap-anim-sheet.png",
     tapImageWidthPx: 82,
     tapImageAnchorFrac: 0.9588,
+    tapAnimFrames: 12,
+    tapAnimFps: 12,
     // No upper-trail fade mask: at the real 0.163s-apart chart spacing,
     // this asset's own compressed vertical footprint already keeps
     // consecutive notes' sharp tips individually readable (approved after
@@ -310,20 +326,42 @@ export class Renderer {
     ctx.fillStyle = ribbonGrad;
     ctx.fillRect(cx - ribbonW / 2, bandTop, ribbonW, bandBottom - bandTop);
 
+    // Rim/core are drawn as a handful of fixed-count wavy segments (not
+    // straight lines) so the body reads as a living current rather than a
+    // static bar ("炎の筋が軽くうねる") - segment count is fixed regardless
+    // of HOLD duration, so a long HOLD costs the same per-frame draw calls
+    // as a short one (item: no per-note-length-scaling render cost). The
+    // waver amplitude/speed is duration-independent too - only the band's
+    // start/end move with duration, never the animation's own timing.
+    const WAVE_SEGMENTS = 5;
+    const waveSeed = note.id * 0.83 + note.lane * 0.41;
+    const waveAmp = ribbonW * 0.16 * (holding ? 1 : 0.6);
+    const wobble = (frac) => Math.sin(currentTime * 1.3 + frac * 3.4 + waveSeed) * waveAmp;
+
     ctx.strokeStyle = `rgba(220,235,255,${holding ? 0.75 : 0.42})`;
     ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(cx - ribbonW / 2, bandTop);
-    ctx.lineTo(cx - ribbonW / 2, bandBottom);
-    ctx.moveTo(cx + ribbonW / 2, bandTop);
-    ctx.lineTo(cx + ribbonW / 2, bandBottom);
-    ctx.stroke();
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      for (let i = 0; i <= WAVE_SEGMENTS; i++) {
+        const frac = i / WAVE_SEGMENTS;
+        const py = bandTop + frac * bandLen;
+        const px = cx + side * (ribbonW / 2) + wobble(frac + side * 0.15);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
 
     ctx.strokeStyle = `rgba(235,244,255,${holding ? 0.9 : 0.6})`;
     ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.moveTo(cx, bandTop);
-    ctx.lineTo(cx, bandBottom);
+    for (let i = 0; i <= WAVE_SEGMENTS; i++) {
+      const frac = i / WAVE_SEGMENTS;
+      const py = bandTop + frac * bandLen;
+      const px = cx + wobble(frac);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
     ctx.stroke();
 
     // energy flowing along the body toward the head - 2 soft glints
@@ -332,13 +370,46 @@ export class Renderer {
     for (let i = 0; i < 2; i++) {
       const phase = ((currentTime * flowSpeed + i * 0.5 + note.id * 0.13) % 1 + 1) % 1;
       const py = bandTop + phase * bandLen;
-      const pulseGrad = ctx.createRadialGradient(cx, py, 0, cx, py, ribbonW * 0.8);
+      const px = cx + wobble(phase);
+      const pulseGrad = ctx.createRadialGradient(px, py, 0, px, py, ribbonW * 0.8);
       pulseGrad.addColorStop(0, `rgba(255,255,255,${holding ? 0.65 : 0.32})`);
       pulseGrad.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = pulseGrad;
       ctx.beginPath();
-      ctx.arc(cx, py, ribbonW * 0.8, 0, Math.PI * 2);
+      ctx.arc(px, py, ribbonW * 0.8, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // localized discharge: a short jagged arc that flickers in/out at a
+    // position along the body that only changes once per full cycle
+    // (floor(currentTime/cycle)), not per-frame - still a deterministic
+    // function of chart-derived time, never Math.random(). Kept dim
+    // relative to the HEAD/TAP art per the intended visual priority
+    // (HEAD tip > TAP > BODY), and only drawn while actively held so an
+    // idle (not-yet-reached) HOLD body stays quiet.
+    if (holding && bandLen > 18) {
+      const dischargeCycle = 0.9;
+      const cycleIdx = Math.floor(currentTime / dischargeCycle);
+      const cyclePhase = (currentTime % dischargeCycle) / dischargeCycle;
+      const envelope = cyclePhase < 0.5 ? Math.sin(cyclePhase * Math.PI * 2) : 0; // fades out by mid-cycle, quiet rest of cycle
+      if (envelope > 0.02) {
+        const posSeed = Math.sin(note.id * 3.1 + note.lane * 1.7 + cycleIdx * 2.63) * 0.5 + 0.5;
+        const py0 = bandTop + posSeed * bandLen * 0.7;
+        const segLen = Math.min(bandLen * 0.22, 26);
+        ctx.save();
+        ctx.globalAlpha = envelope * 0.55;
+        ctx.strokeStyle = "rgba(225,238,255,0.95)";
+        ctx.shadowColor = "rgba(200,220,255,0.9)";
+        ctx.shadowBlur = 4;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(cx, py0);
+        ctx.lineTo(cx + ribbonW * 0.5, py0 + segLen * 0.4);
+        ctx.lineTo(cx - ribbonW * 0.3, py0 + segLen * 0.7);
+        ctx.lineTo(cx + ribbonW * 0.4, py0 + segLen);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
 
     // body clipped by the top edge gets a soft fade cap instead of an
@@ -431,6 +502,44 @@ export class Renderer {
       ctx.lineTo(cx - tr * 0.62, tailY);
       ctx.closePath();
       ctx.fill();
+      ctx.restore();
+
+      // Continuous, low-key "energy converges and terminates here" cue -
+      // separate from the releasePulse gate-closing cue above (which only
+      // activates near the release window) - so the TAIL reads as an
+      // active termination point for its whole time on screen, not only
+      // right at release. A short burst of small particles drifts inward
+      // and a brief white-hot pulse flares at the terminal once per cycle,
+      // deterministically seeded per note (note.id/lane), never per-frame
+      // random. Deliberately dimmer than the HEAD, per the intended read
+      // priority (HEAD tip > TAP > BODY/TAIL).
+      const convergeCycle = 1.3;
+      const convergeSeed = note.id * 0.53 + note.lane * 0.29;
+      const convergePhase = (((currentTime + convergeSeed) % convergeCycle) + convergeCycle) % convergeCycle / convergeCycle;
+      ctx.save();
+      for (let i = 0; i < 2; i++) {
+        const ang = i * Math.PI + convergeSeed * 6;
+        const r = tr * 2.6 * (1 - convergePhase);
+        const px = cx + Math.cos(ang) * r;
+        const py = tailY + Math.sin(ang) * r * 0.5;
+        ctx.globalAlpha = (1 - convergePhase) * 0.5 * (holding ? 1 : 0.6);
+        ctx.fillStyle = "rgba(220,235,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(px, py, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (convergePhase < 0.12) {
+        const pulseT = convergePhase / 0.12;
+        const pr = tr * (0.6 + pulseT * 0.8);
+        ctx.globalAlpha = (1 - pulseT) * 0.6 * (holding ? 1 : 0.6);
+        const pulseGlow = ctx.createRadialGradient(cx, tailY, 0, cx, tailY, pr);
+        pulseGlow.addColorStop(0, "rgba(255,255,255,0.9)");
+        pulseGlow.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = pulseGlow;
+        ctx.beginPath();
+        ctx.arc(cx, tailY, pr, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
 
       // synchronized flash on the judge line itself, right as RELEASE
@@ -675,6 +784,36 @@ export class Renderer {
   // reuses this same art via _drawThemedHoldHead below; the HOLD body/
   // tail/collar ring are still NEVER themed, so a HOLD stays unambiguously
   // a HOLD regardless of song.
+  // Splits a themed note image into (frameW, frameH) - a plain single-frame
+  // image when the theme has no tapAnimFrames (or only 1), or one frame of
+  // an equal-width horizontal sprite-strip otherwise. Every caller that
+  // draws the image must use this so a static-image theme and an animated
+  // one share the exact same sizing/anchoring math - only the source
+  // rectangle differs.
+  _themeFrameSize(img) {
+    const frames = this.theme.tapAnimFrames || 1;
+    const frameW = (img.naturalWidth || frames) / frames;
+    const frameH = img.naturalHeight || 1;
+    return { frameW, frameH };
+  }
+
+  // Deterministic sprite-sheet frame index for the current theme's animated
+  // note art. The phase is currentTime + note.time (never Math.random() or
+  // any other per-frame-random source), so replaying the same chart always
+  // looks identical, while notes with different note.time values land on
+  // different frames at any given instant - consecutive/simultaneous notes
+  // don't flicker in lockstep. A theme with tapAnimFrames <= 1 (or unset)
+  // always returns 0, i.e. draws the single static frame as before.
+  _animFrame(theme, note, currentTime) {
+    const frames = theme.tapAnimFrames || 1;
+    if (frames <= 1) return 0;
+    const fps = theme.tapAnimFps || 12;
+    const loopSec = frames / fps;
+    const localClock = currentTime + note.time;
+    const cyclePos = ((localClock / loopSec) % 1 + 1) % 1;
+    return Math.min(frames - 1, Math.floor(cyclePos * frames));
+  }
+
   _drawThemedImageNote(x, y, note, currentTime, img) {
     const ctx = this.ctx;
     const cx = x + this.laneWidth / 2;
@@ -685,8 +824,10 @@ export class Renderer {
     // draws larger than the lane itself), falling back to the old lane-
     // relative sizing for any theme that doesn't set tapImageWidthPx.
     const w = this.theme.tapImageWidthPx || this.laneWidth * NOTE_W_RATIO;
-    const aspect = img.naturalHeight / (img.naturalWidth || 1);
+    const { frameW, frameH } = this._themeFrameSize(img);
+    const aspect = frameH / (frameW || 1);
     const h = w * aspect;
+    const sx = this._animFrame(this.theme, note, currentTime) * frameW;
     // Where the art's own bright base/judge point sits, as a fraction of
     // its height (measured from the actual asset, not guessed) - so the
     // judge point lands exactly on (cx, cy) regardless of draw size,
@@ -747,7 +888,7 @@ export class Renderer {
       const echoCy = cy - h * (0.14 + i * 0.11);
       const echoTopY = echoCy - h * echoScale * anchorFrac;
       ctx.globalAlpha = (0.11 - i * 0.04) * (0.5 + boost * 0.5);
-      ctx.drawImage(img, cx + echoSway - (w * echoScale) / 2, echoTopY, w * echoScale, h * echoScale);
+      ctx.drawImage(img, sx, 0, frameW, frameH, cx + echoSway - (w * echoScale) / 2, echoTopY, w * echoScale, h * echoScale);
     }
     ctx.globalAlpha = 1;
 
@@ -758,7 +899,7 @@ export class Renderer {
     // ど光が少し凝縮する").
     ctx.shadowColor = "rgba(110,190,255,0.75)";
     ctx.shadowBlur = 5 + boost * 12;
-    ctx.drawImage(img, cx + sway - w / 2, topY, w, h);
+    ctx.drawImage(img, sx, 0, frameW, frameH, cx + sway - w / 2, topY, w, h);
     ctx.shadowBlur = 0;
 
     // Fade the upper portion of what was just drawn (halo + echoes + main
@@ -837,10 +978,12 @@ export class Renderer {
 
     const ctx = this.ctx;
     const w = (this.theme.tapImageWidthPx || this.laneWidth * NOTE_W_RATIO) * (holding ? 1.08 : 1);
-    const aspect = img.naturalHeight / (img.naturalWidth || 1);
+    const { frameW, frameH } = this._themeFrameSize(img);
+    const aspect = frameH / (frameW || 1);
     const h = w * aspect;
     const anchorFrac = this.theme.tapImageAnchorFrac ?? 0.5;
     const topY = headY - h * anchorFrac;
+    const sx = this._animFrame(this.theme, note, currentTime) * frameW;
 
     const seed = note.id * 1.7 + note.time * 2.3 + note.lane * 0.97;
     const t = currentTime + seed;
@@ -864,7 +1007,7 @@ export class Renderer {
 
     ctx.shadowColor = holding ? "rgba(150,205,255,0.9)" : "rgba(110,190,255,0.75)";
     ctx.shadowBlur = (holding ? 9 : 5) + headBoost * 12;
-    ctx.drawImage(img, cx + sway - w / 2, topY, w, h);
+    ctx.drawImage(img, sx, 0, frameW, frameH, cx + sway - w / 2, topY, w, h);
     ctx.shadowBlur = 0;
   }
 

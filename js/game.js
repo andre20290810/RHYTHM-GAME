@@ -34,6 +34,10 @@ export class RhythmGame {
     this.judgeCounts = { PERFECT: 0, GREAT: 0, GOOD: 0, MISS: 0 };
     this.lastJudge = null; // for on-screen popup: { grade, lane, atSec }
     this.finished = false;
+
+    // --- temporary real-device diagnostics (dev-only, additive) ---
+    this.tapOffsets = []; // signed ms, (actualInputTime - note.time) * 1000, one entry per judged laneDown
+    this.holdStats = { started: 0, completed: 0, broken: 0, pointerleaveBroken: 0 };
   }
 
   _recordJudge(grade) {
@@ -45,6 +49,29 @@ export class RhythmGame {
       if (this.combo > this.maxCombo) this.maxCombo = this.combo;
     }
     this.score += (MAX_SCORE / this.totalNotes) * JUDGE_SCORE_WEIGHT[grade];
+  }
+
+  /** Corrects a judgment already recorded via _recordJudge (e.g. a hold whose
+   * head was judged PERFECT but which later breaks early), without double-
+   * counting the note against totalNotes. */
+  _reviseJudge(oldGrade, newGrade) {
+    this.judgeCounts[oldGrade]--;
+    this.score -= (MAX_SCORE / this.totalNotes) * JUDGE_SCORE_WEIGHT[oldGrade];
+    this.judgeCounts[newGrade]++;
+    this.score += (MAX_SCORE / this.totalNotes) * JUDGE_SCORE_WEIGHT[newGrade];
+    this.combo = 0;
+  }
+
+  getTimingStats() {
+    const n = this.tapOffsets.length;
+    if (!n) return { avgMs: 0, medianMs: 0, earlyCount: 0, lateCount: 0 };
+    const sum = this.tapOffsets.reduce((a, b) => a + b, 0);
+    const sorted = [...this.tapOffsets].sort((a, b) => a - b);
+    const mid = Math.floor(n / 2);
+    const medianMs = n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    const earlyCount = this.tapOffsets.filter((v) => v < 0).length;
+    const lateCount = this.tapOffsets.filter((v) => v > 0).length;
+    return { avgMs: sum / n, medianMs, earlyCount, lateCount };
   }
 
   /** Call every animation frame with the audio-clock time in seconds. */
@@ -62,6 +89,7 @@ export class RhythmGame {
       const hold = this.activeHold[lane];
       if (hold && hold.state === "holding" && currentTime > hold.time + hold.duration) {
         hold.state = "completed";
+        this.holdStats.completed++;
         this.activeHold[lane] = null;
       }
     }
@@ -79,9 +107,13 @@ export class RhythmGame {
     if (grade === null) return null; // too early to judge yet, leave pending
     queue.shift();
     note.grade = grade;
+    this.tapOffsets.push(diffMs);
     if (note.type === "hold") {
       note.state = grade === "MISS" ? "missed" : "holding";
-      if (note.state === "holding") this.activeHold[lane] = note;
+      if (note.state === "holding") {
+        this.activeHold[lane] = note;
+        this.holdStats.started++;
+      }
     } else {
       note.state = "hit";
     }
@@ -90,16 +122,23 @@ export class RhythmGame {
     return grade;
   }
 
-  laneUp(lane, currentTime) {
+  /** @param {string} [reason] - the triggering DOM event type (e.g. "pointerup",
+   * "pointercancel", "pointerleave", "keyup"), used only for diagnostics below;
+   * does not change which events cause a release. */
+  laneUp(lane, currentTime, reason) {
     const hold = this.activeHold[lane];
     if (!hold || hold.state !== "holding") return;
     const tailTime = hold.time + hold.duration;
     if (currentTime < tailTime - RELEASE_TOLERANCE_SEC) {
       hold.state = "broken";
-      this._recordJudge("MISS");
+      this._reviseJudge(hold.grade, "MISS");
+      hold.grade = "MISS";
+      this.holdStats.broken++;
+      if (reason === "pointerleave") this.holdStats.pointerleaveBroken++;
       this.lastJudge = { grade: "MISS", lane, atSec: currentTime };
     } else {
       hold.state = "completed";
+      this.holdStats.completed++;
     }
     this.activeHold[lane] = null;
   }

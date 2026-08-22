@@ -26,7 +26,7 @@ export class InputController {
       const release = (e) => {
         if (this.activePointers.has(e.pointerId)) {
           this.activePointers.delete(e.pointerId);
-          this.onLaneUp(lane);
+          this.onLaneUp(lane, e.type);
         }
       };
       el.addEventListener("pointerup", release);
@@ -58,7 +58,7 @@ export class InputController {
     const lane = LANE_KEYS.indexOf(e.code);
     if (lane === -1) return;
     this.keyLaneDown.delete(lane);
-    this.onLaneUp(lane);
+    this.onLaneUp(lane, "keyup");
   }
 
   destroy() {

@@ -532,7 +532,7 @@ async function init() {
 
   input = new InputController(touchZones, {
     onLaneDown: (lane) => handleLaneDown(lane),
-    onLaneUp: (lane) => handleLaneUp(lane),
+    onLaneUp: (lane, reason) => handleLaneUp(lane, reason),
   });
 }
 
@@ -963,11 +963,11 @@ function handleLaneDown(lane) {
   updateHud();
 }
 
-function handleLaneUp(lane) {
+function handleLaneUp(lane, reason) {
   if (paused || !game || countdownActive) return;
   laneElements[lane].classList.remove("active");
   judgePads[lane]?.classList.remove("active");
-  game.laneUp(lane, audioEngine.currentTime);
+  game.laneUp(lane, audioEngine.currentTime, reason);
 }
 
 function showJudgePopup(grade) {
@@ -1134,7 +1134,40 @@ function finishGame() {
     artistBtn.classList.add("hidden");
   }
 
+  renderResultDebugPanel();
+
   showScreen("result");
+}
+
+// ---------- TEMPORARY real-device diagnostic panel (dev-only, additive) ----------
+// Renders directly on the RESULT screen so it's visible just by playing once
+// on a real phone and screenshotting - no console/desktop connection needed.
+// Purely additive: does not touch scoring, judging, thresholds, or the
+// existing RESULT fields above. Remove this block (and its one call site in
+// finishGame()) once the rank/C-symptom investigation is done.
+function renderResultDebugPanel() {
+  let panel = document.getElementById("result-debug-panel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "result-debug-panel";
+    panel.style.cssText =
+      "margin:14px auto 0;max-width:320px;padding:10px 12px;border:1px solid rgba(255,255,255,0.25);" +
+      "border-radius:8px;background:rgba(0,0,0,0.55);color:#cfe;font:11px/1.6 monospace;text-align:left;" +
+      "white-space:pre-wrap;";
+    const resultPanel = document.querySelector(".result-panel");
+    (resultPanel || document.body).appendChild(panel);
+  }
+  const stats = game.getTimingStats();
+  const hs = game.holdStats;
+  panel.textContent =
+    "[DEBUG] rank=" + game.getRank() + " ratio=" + (game.getScoreRatio() * 100).toFixed(2) + "%\n" +
+    "PERFECT=" + game.judgeCounts.PERFECT + " GREAT=" + game.judgeCounts.GREAT +
+    " GOOD=" + game.judgeCounts.GOOD + " MISS=" + game.judgeCounts.MISS + "\n" +
+    "HOLD start=" + hs.started + " complete=" + hs.completed + " break=" + hs.broken +
+    " pointerleaveBreak=" + hs.pointerleaveBroken + "\n" +
+    "TIMING avg=" + stats.avgMs.toFixed(1) + "ms median=" + stats.medianMs.toFixed(1) + "ms" +
+    " early=" + stats.earlyCount + " late=" + stats.lateCount +
+    " (negative=early press, positive=late press)";
 }
 
 // ---------- Portrait-only lock ----------
